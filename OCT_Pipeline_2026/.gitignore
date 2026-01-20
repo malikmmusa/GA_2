@@ -38,18 +38,18 @@ venv.bak/
 *.pt
 *.ckpt
 
-# Data directories (too large for git)
-data/raw/*.jpg
-data/raw/*.jpeg
-data/raw/*.png
-data/raw/*.tif
-data/raw/*.tiff
-data/processed/b_scans/*.jpg
-data/processed/b_scans/*.jpeg
-data/processed/b_scans/*.png
-data/processed/en_face/*.jpg
-data/processed/en_face/*.jpeg
-data/processed/en_face/*.png
+# Data directories (modified to include images per user request)
+# data/raw/*.jpg
+# data/raw/*.jpeg
+# data/raw/*.png
+# data/raw/*.tif
+# data/raw/*.tiff
+# data/processed/b_scans/*.jpg
+# data/processed/b_scans/*.jpeg
+# data/processed/b_scans/*.png
+# data/processed/en_face/*.jpg
+# data/processed/en_face/*.jpeg
+# data/processed/en_face/*.png
 
 # Keep directory structure but not images
 !data/raw/.gitkeep
