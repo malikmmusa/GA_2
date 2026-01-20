@@ -81,6 +81,19 @@ class CoordinateAwareDataset(Dataset):
             if random.random() > 0.5:
                 angle = random.uniform(-10, 10)
                 image = TF.rotate(image, angle)
+
+            # Random Translation (Horizontal) - NEW: To fix edge bias
+            if random.random() > 0.5:
+                # Shift up to 30% of width
+                max_shift_pct = 0.3
+                shift_pct = random.uniform(-max_shift_pct, max_shift_pct)
+                
+                # Check if shifting keeps the disc visible (with margin)
+                new_x = x + shift_pct
+                if 0.0 < new_x < 1.0:
+                    shift_px = int(shift_pct * self.size[0])
+                    image = TF.affine(image, angle=0, translate=(shift_px, 0), scale=1.0, shear=0)
+                    x = new_x
             
             # Color Jitter
             if random.random() > 0.5:

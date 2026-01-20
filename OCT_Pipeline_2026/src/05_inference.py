@@ -90,6 +90,23 @@ def run_stage1(image_path, model_path, output_dir, device):
     # Draw a circle at the center
     cv2.circle(vis, (dx_abs, dy_abs), 15, (255, 0, 0), -1) # Blue center
     
+    # DEBUG: Draw Ground Truth if provided
+    if args.debug_gt_x is not None and args.debug_gt_y is not None:
+        gt_x_rel = int(args.debug_gt_x)
+        gt_y = int(args.debug_gt_y)
+        gt_h = int(args.debug_gt_h) if args.debug_gt_h else 150
+        
+        # Convert Relative GT to Absolute GT
+        gt_x_abs = start_col + gt_x_rel
+        
+        y_top_gt = max(0, gt_y - gt_h // 2)
+        y_bottom_gt = min(h, gt_y + gt_h // 2)
+        
+        # Draw GREEN line for Ground Truth
+        cv2.line(vis, (gt_x_abs, y_top_gt), (gt_x_abs, y_bottom_gt), (0, 255, 0), 8)
+        cv2.circle(vis, (gt_x_abs, gt_y), 12, (0, 255, 0), -1)
+        print(f"  [DEBUG] Drawn Ground Truth at Abs x={gt_x_abs} (Rel {gt_x_rel}), y={gt_y}, h={gt_h}")
+    
     os.makedirs(output_dir, exist_ok=True)
     out_path = Path(output_dir) / f"{Path(image_path).stem}_result.png"
     cv2.imwrite(str(out_path), vis)
@@ -100,7 +117,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('image_path', type=str)
     parser.add_argument('--model', default='OCT_Pipeline_2026/models/disc_detector.pth')
+    
+    # Debug arguments
+    parser.add_argument('--debug_gt_x', type=int, default=None)
+    parser.add_argument('--debug_gt_y', type=int, default=None)
+    parser.add_argument('--debug_gt_h', type=int, default=None)
+    
     args = parser.parse_args()
     
     device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
-    run_stage1(args.image_path, args.model, 'OCT_Pipeline_2026/data/inference_results', device)
+    run_stage1(image_path=args.image_path, model_path=args.model, 
+               output_dir='OCT_Pipeline_2026/data/inference_results', device=device)

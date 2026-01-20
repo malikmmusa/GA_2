@@ -67,11 +67,8 @@ def process_image(image_path, debug_dir=None):
     inpainted_dir.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(inpainted_dir / image_path.name), inpainted_img)
     
-    # FIX: Force a standard anatomical height (150px) instead of using the marker line's height
-    # The marker line is often an arbitrary stroke by the clinician.
-    # We want the model to learn the disc location, not the stroke length.
-    STANDARD_DISC_HEIGHT = 150
-    result = {'filename': image_path.name, 'disc_x': cx, 'disc_y': cy, 'disc_height': STANDARD_DISC_HEIGHT}
+    # Use the actual height of the marker line
+    result = {'filename': image_path.name, 'disc_x': cx, 'disc_y': cy, 'disc_height': h}
     
     if debug_dir:
         debug_img = img.copy()
