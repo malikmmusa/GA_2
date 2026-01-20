@@ -60,6 +60,7 @@ venv.bak/
 models/*.pth
 models/*.pt
 models/*.ckpt
+models/debug/
 
 # TensorBoard logs
 runs/
