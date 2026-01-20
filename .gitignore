@@ -1,0 +1,24 @@
+# General
+.DS_Store
+*.log
+__pycache__/
+*.py[cod]
+
+# Virtual Environments
+venv/
+.venv/
+env/
+
+# IDEs
+.idea/
+.vscode/
+.claude/
+
+# Large files/Models
+*.pth
+*.pt
+*.ckpt
+
+# Output/Tmp
+tmp/
+temp/

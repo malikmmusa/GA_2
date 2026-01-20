@@ -1,0 +1,48 @@
+# OCT Pipeline 2026 - Requirements
+# Python 3.9+ recommended
+# Optimized for Apple Silicon M4 Max
+
+# Core Deep Learning (requires PyTorch 2.0+ for MPS backend)
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Image Processing
+opencv-python>=4.5.0
+Pillow>=9.0.0
+scikit-image>=0.19.0
+
+# Data Handling
+numpy>=1.21.0
+pandas>=1.3.0
+
+# Training Augmentations
+albumentations>=1.1.0
+
+# Progress Bars
+tqdm>=4.62.0
+
+# Visualization
+matplotlib>=3.4.0
+seaborn>=0.11.0
+
+# Logging & Experiment Tracking
+tensorboard>=2.8.0
+
+# Scientific Computing
+scipy>=1.7.0
+
+# Jupyter Notebooks
+jupyter>=1.0.0
+ipykernel>=6.0.0
+ipywidgets>=7.6.0
+notebook>=6.4.0
+
+# Utilities
+scikit-learn>=1.0.0
+
+# Optional: Medical Imaging (if working with DICOM)
+# pydicom>=2.2.0
+# nibabel>=3.2.0
+
+# Optional: Weights & Biases for experiment tracking
+# wandb>=0.12.0

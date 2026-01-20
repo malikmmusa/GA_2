@@ -1,0 +1,122 @@
+
+============================================================
+OCT Image Splitter
+============================================================
+Found 52 image(s) to process
+
+  → Detected 105px divider at columns 1720-1825 (removed) + trimmed B:0L+46R, E:7L+0R px
+✓ Processed: 10907481.png -> B-Scan ((1938, 1674, 3)) + En Face ((1938, 1743, 3))
+  → Detected 122px divider at columns 1971-2093 (removed)
+✓ Processed: 1954640.png -> B-Scan ((2204, 1971, 3)) + En Face ((2204, 2022, 3))
+  → Detected 64px divider at columns 1918-1982 (removed) + trimmed B:0L+22R, E:6L+0R px
+✓ Processed: 20287916.png -> B-Scan ((1957, 1896, 3)) + En Face ((1957, 1935, 3))
+  → Detected content boundary at column 1624
+     B-scan: 1624px wide, En face: 2024px wide
+✓ Processed: 20287916_2.png -> B-Scan ((1870, 1624, 3)) + En Face ((1870, 2024, 3))
+  → Detected 100px divider at columns 1622-1722 (removed) + trimmed B:0L+46R, E:0L+0R px
+✓ Processed: 21755425.png -> B-Scan ((1709, 1576, 3)) + En Face ((1709, 1660, 3))
+  → Detected 127px divider at columns 1763-1890 (removed) + trimmed B:0L+49R, E:0L+0R px
+✓ Processed: 21860674.png -> B-Scan ((1888, 1714, 3)) + En Face ((1888, 1767, 3))
+  → Detected 125px divider at columns 2043-2168 (removed) + trimmed B:0L+60R, E:0L+0R px
+✓ Processed: 21860674_2.png -> B-Scan ((1782, 1983, 3)) + En Face ((1782, 2094, 3))
+  → Detected 107px divider at columns 1734-1841 (removed) + trimmed B:0L+48R, E:0L+0R px
+✓ Processed: 21896237.png -> B-Scan ((1865, 1686, 3)) + En Face ((1865, 1752, 3))
+  → Detected 111px divider at columns 1770-1881 (removed) + trimmed B:0L+50R, E:0L+0R px
+✓ Processed: 21896237_2.png -> B-Scan ((1938, 1720, 3)) + En Face ((1938, 1817, 3))
+  → Detected 109px divider at columns 1764-1873 (removed) + trimmed B:0L+49R, E:0L+0R px
+✓ Processed: 21985444.png -> B-Scan ((1915, 1715, 3)) + En Face ((1915, 1789, 3))
+  → Detected 154px divider at columns 1770-1924 (removed) + trimmed B:0L+50R, E:0L+0R px
+✓ Processed: 21985444_2.png -> B-Scan ((1874, 1720, 3)) + En Face ((1874, 1783, 3))
+  → Detected 53px divider at columns 1608-1661 (removed) + trimmed B:0L+18R, E:0L+0R px
+✓ Processed: 22028370.png -> B-Scan ((1677, 1590, 3)) + En Face ((1677, 1625, 3))
+  → Detected 53px divider at columns 1594-1647 (removed) + trimmed B:0L+18R, E:0L+0R px
+✓ Processed: 22028370_2.png -> B-Scan ((1659, 1576, 3)) + En Face ((1659, 1607, 3))
+  → Detected 73px divider at columns 2163-2236 (removed) + trimmed B:0L+24R, E:0L+0R px
+✓ Processed: 22138604.png -> B-Scan ((2222, 2139, 3)) + En Face ((2222, 2168, 3))
+  → Detected 77px divider at columns 2173-2250 (removed) + trimmed B:0L+25R, E:0L+0R px
+✓ Processed: 22138604_2.png -> B-Scan ((2259, 2148, 3)) + En Face ((2259, 2150, 3))
+  → Detected 60px divider at columns 1806-1866 (removed) + trimmed B:0L+21R, E:0L+0R px
+✓ Processed: 22157242.png -> B-Scan ((1929, 1785, 3)) + En Face ((1929, 1828, 3))
+  → Detected 57px divider at columns 1695-1752 (removed) + trimmed B:0L+20R, E:0L+0R px
+✓ Processed: 22157242_2.png -> B-Scan ((1782, 1675, 3)) + En Face ((1782, 1722, 3))
+  → Detected 106px divider at columns 1722-1828 (removed)
+✓ Processed: 22161106.png -> B-Scan ((1782, 1722, 3)) + En Face ((1782, 1760, 3))
+  → Detected 115px divider at columns 1888-2003 (removed)
+✓ Processed: 22161106_2.png -> B-Scan ((1815, 1888, 3)) + En Face ((1815, 1860, 3))
+  → Detected 106px divider at columns 1717-1823 (removed)
+✓ Processed: 22163937.png -> B-Scan ((1828, 1717, 3)) + En Face ((1828, 1756, 3))
+  → Detected 102px divider at columns 1669-1771 (removed)
+✓ Processed: 22163937_2.png -> B-Scan ((1782, 1669, 3)) + En Face ((1782, 1694, 3))
+  → Detected 105px divider at columns 1730-1835 (removed) + trimmed B:0L+0R, E:0L+6R px
+✓ Processed: 22205914.png -> B-Scan ((1906, 1730, 3)) + En Face ((1906, 1770, 3))
+  → Detected 106px divider at columns 1711-1817 (removed) + trimmed B:0L+47R, E:0L+0R px
+✓ Processed: 22337217.png -> B-Scan ((1870, 1664, 3)) + En Face ((1870, 1725, 3))
+  → Detected 103px divider at columns 1685-1788 (removed) + trimmed B:0L+47R, E:0L+0R px
+✓ Processed: 22337217_2.png -> B-Scan ((1883, 1638, 3)) + En Face ((1883, 1699, 3))
+  → Detected 116px divider at columns 1897-2013 (removed) + trimmed B:0L+52R, E:8L+0R px
+✓ Processed: 22449615.png -> B-Scan ((1989, 1845, 3)) + En Face ((1989, 1897, 3))
+  → Detected 73px divider at columns 2138-2211 (removed) + trimmed B:0L+24R, E:0L+0R px
+✓ Processed: 22463450.png -> B-Scan ((2296, 2114, 3)) + En Face ((2296, 2189, 3))
+  → Detected 120px divider at columns 1951-2071 (removed)
+✓ Processed: 22504964.png -> B-Scan ((2140, 1951, 3)) + En Face ((2140, 1953, 3))
+  → Detected 80px divider at columns 1864-1944 (removed) + trimmed B:0L+29R, E:0L+0R px
+✓ Processed: 22732823.png -> B-Scan ((1883, 1835, 3)) + En Face ((1883, 1855, 3))
+  → Detected content boundary at column 1961
+     B-scan: 1961px wide, En face: 1678px wide
+✓ Processed: 22749684.png -> B-Scan ((2021, 1961, 3)) + En Face ((2021, 1678, 3))
+  → Detected content boundary at column 1671
+     B-scan: 1671px wide, En face: 1885px wide
+✓ Processed: 22749684_2.png -> B-Scan ((1957, 1671, 3)) + En Face ((1957, 1885, 3))
+  → Detected 95px divider at columns 1934-2029 (removed) + trimmed B:0L+0R, E:25L+0R px
+✓ Processed: 22899013.png -> B-Scan ((1989, 1934, 3)) + En Face ((1989, 1979, 3))
+  → Detected 109px divider at columns 1751-1860 (removed)
+✓ Processed: 22973051.png -> B-Scan ((1915, 1751, 3)) + En Face ((1915, 1815, 3))
+  → Detected 104px divider at columns 1664-1768 (removed) + trimmed B:0L+46R, E:0L+0R px
+✓ Processed: 23009082.png -> B-Scan ((1879, 1618, 3)) + En Face ((1879, 1706, 3))
+  → Detected 113px divider at columns 1838-1951 (removed) + trimmed B:0L+52R, E:0L+0R px
+✓ Processed: 23009082_2.png -> B-Scan ((1847, 1786, 3)) + En Face ((1847, 1848, 3))
+  → Detected 69px divider at columns 2095-2164 (removed)
+✓ Processed: 23020894.png -> B-Scan ((2122, 2095, 3)) + En Face ((2122, 2052, 3))
+  → Detected 65px divider at columns 1995-2060 (removed)
+✓ Processed: 23020894_2.png -> B-Scan ((2021, 1995, 3)) + En Face ((2021, 2000, 3))
+  → Detected 73px divider at columns 2133-2206 (removed) + trimmed B:0L+25R, E:0L+0R px
+✓ Processed: 23031301.png -> B-Scan ((2149, 2108, 3)) + En Face ((2149, 2157, 3))
+  → Detected 73px divider at columns 2154-2227 (removed) + trimmed B:0L+25R, E:0L+0R px
+✓ Processed: 23031301_2.png -> B-Scan ((2090, 2129, 3)) + En Face ((2090, 2173, 3))
+  → Detected 102px divider at columns 1683-1785 (removed) + trimmed B:0L+45R, E:0L+0R px
+✓ Processed: 23227642.png -> B-Scan ((1879, 1638, 3)) + En Face ((1879, 1675, 3))
+  → Detected 63px divider at columns 1884-1947 (removed) + trimmed B:0L+21R, E:6L+0R px
+✓ Processed: 23242134.png -> B-Scan ((1892, 1863, 3)) + En Face ((1892, 1887, 3))
+  → Detected 60px divider at columns 1777-1837 (removed) + trimmed B:0L+20R, E:6L+0R px
+✓ Processed: 23242134_2.png -> B-Scan ((1824, 1757, 3)) + En Face ((1824, 1777, 3))
+  → Detected 101px divider at columns 1637-1738 (removed) + trimmed B:0L+44R, E:0L+0R px
+✓ Processed: 23294265.png -> B-Scan ((1810, 1593, 3)) + En Face ((1810, 1635, 3))
+  → Detected 132px divider at columns 1776-1908 (removed) + trimmed B:0L+50R, E:0L+0R px
+✓ Processed: 23294265_2.png -> B-Scan ((1847, 1726, 3)) + En Face ((1847, 1804, 3))
+  → Detected 60px divider at columns 1779-1839 (removed) + trimmed B:0L+21R, E:0L+0R px
+✓ Processed: 23320162.png -> B-Scan ((1851, 1758, 3)) + En Face ((1851, 1781, 3))
+  → Detected 55px divider at columns 1661-1716 (removed)
+✓ Processed: 23320162_2.png -> B-Scan ((1815, 1661, 3)) + En Face ((1815, 1666, 3))
+  → Detected 71px divider at columns 1818-1889 (removed) + trimmed B:0L+21R, E:0L+0R px
+✓ Processed: 23439203.png -> B-Scan ((1810, 1797, 3)) + En Face ((1810, 1814, 3))
+  → Detected 207px divider at columns 1698-1905 (removed) + trimmed B:0L+47R, E:0L+0R px
+✓ Processed: 5455178.png -> B-Scan ((1957, 1651, 3)) + En Face ((1957, 1665, 3))
+  → Detected 246px divider at columns 1799-2045 (removed) + trimmed B:0L+53R, E:0L+0R px
+✓ Processed: 5455178_2.png -> B-Scan ((1947, 1746, 3)) + En Face ((1947, 1814, 3))
+  → Detected 62px divider at columns 1846-1908 (removed) + trimmed B:0L+21R, E:0L+0R px
+✓ Processed: 9147178.png -> B-Scan ((1888, 1825, 3)) + En Face ((1888, 1868, 3))
+  → Detected 65px divider at columns 1934-1999 (removed) + trimmed B:0L+22R, E:0L+0R px
+✓ Processed: 9147178_2.png -> B-Scan ((1934, 1912, 3)) + En Face ((1934, 1961, 3))
+  → Detected 100px divider at columns 1620-1720 (removed) + trimmed B:0L+42R, E:5L+0R px
+✓ Processed: 9339896.png -> B-Scan ((1920, 1578, 3)) + En Face ((1920, 1620, 3))
+  → Detected 107px divider at columns 1728-1835 (removed) + trimmed B:0L+47R, E:7L+0R px
+✓ Processed: 9339896_2.png -> B-Scan ((1888, 1681, 3)) + En Face ((1888, 1728, 3))
+
+============================================================
+✓ Successfully processed 52/52 images
+============================================================
+B-Scans saved to: /Users/musamalik/OCT_Project/OCT_Pipeline_2026/data/processed/b_scans
+En Face images saved to: /Users/musamalik/OCT_Project/OCT_Pipeline_2026/data/processed/en_face
+============================================================
+
+✓ Verification passed: 54 matching files in both directories
