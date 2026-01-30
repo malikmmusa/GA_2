@@ -71,24 +71,40 @@ def process_heatmap_logic(heatmap, original_h, original_w, offset_x):
 
     # 3. Largest contour is the disc core
     c = max(contours, key=cv2.contourArea)
+    
+    # --- Refined logic: Maximum Vertical Feret Diameter ---
+    # Create a clean mask for just this contour to scan column-by-column
+    contour_mask = np.zeros_like(mask)
+    cv2.drawContours(contour_mask, [c], -1, 255, -1)
+    
     x, y, w, h = cv2.boundingRect(c)
     
-    # 4. Calculate coordinates
-    # Center X (relative)
-    cx_rel = x + w // 2
+    max_span = -1
+    best_x = x + w // 2 # Default to center if logic fails
+    best_top = y
+    best_bottom = y + h
     
-    # Top and Bottom Y (relative) - "Highest deep red point to lowest deep red point"
-    top_y_rel = y
-    bottom_y_rel = y + h
+    # Scan the x-coordinate where the column has the tallest vertical span
+    for col_x in range(x, x + w):
+        column = contour_mask[:, col_x]
+        pos_pixels = np.where(column > 0)[0]
+        
+        if len(pos_pixels) > 0:
+            top_y = pos_pixels[0]
+            bottom_y = pos_pixels[-1]
+            span = bottom_y - top_y
+            
+            if span > max_span:
+                max_span = span
+                best_x = col_x
+                best_top = top_y
+                best_bottom = bottom_y
     
-    # Center Y (relative)
-    cy_rel = y + h // 2
-    
-    # Absolute Coordinates
-    cx_abs = cx_rel + offset_x
-    top_pt = (cx_abs, top_y_rel)
-    bottom_pt = (cx_abs, bottom_y_rel)
-    center_pt = (cx_abs, cy_rel)
+    # Map to Absolute Coordinates
+    cx_abs = int(best_x + offset_x)
+    top_pt = (cx_abs, int(best_top))
+    bottom_pt = (cx_abs, int(best_bottom))
+    center_pt = (cx_abs, int((best_top + best_bottom) // 2))
     
     return top_pt, bottom_pt, center_pt
 
