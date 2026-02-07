@@ -26,18 +26,20 @@ async def segment_ga(
     disc_center_x: Optional[float] = Query(None),
     disc_center_y: Optional[float] = Query(None),
     disc_height_pixels: Optional[float] = Query(None),
-    en_face_split_x: Optional[int] = Query(None)
+    en_face_split_x: Optional[int] = Query(None),
+    fovea_x: Optional[float] = Query(None),
+    fovea_y: Optional[float] = Query(None)
 ) -> Dict:
     """
-    Segment Geographic Atrophy (GA) regions using K-means clustering.
+    Segment Geographic Atrophy (GA) regions using multi-feature K-means clustering.
     
     The algorithm uses:
-    - CLAHE contrast enhancement
-    - K-means clustering (3 clusters)
-    - Morphological cleanup
-    - Size, circularity, and location filtering
+    - Multi-channel features (intensity + texture + contrast)
+    - K-means clustering (5 clusters with GA likelihood scoring)
+    - Morphological cleanup with watershed splitting
+    - Anatomy-aware region scoring
     
-    Optionally masks out the optic disc if coordinates provided.
+    Optionally masks out the optic disc and uses fovea for anatomy-aware scoring.
     
     Args:
         file: Uploaded OCT image
@@ -45,6 +47,8 @@ async def segment_ga(
         disc_center_y: Optional disc center Y for masking
         disc_height_pixels: Optional disc height for masking
         en_face_split_x: Optional split point to extract en-face region
+        fovea_x: Optional fovea X for anatomy-aware scoring
+        fovea_y: Optional fovea Y for anatomy-aware scoring
     
     Returns:
         GASegmentationResponse with list of GA region contours
@@ -70,7 +74,9 @@ async def segment_ga(
             disc_center_x=disc_center_x,
             disc_center_y=disc_center_y,
             disc_height_pixels=disc_height_pixels,
-            en_face_split_x=en_face_split_x
+            en_face_split_x=en_face_split_x,
+            fovea_x=fovea_x,
+            fovea_y=fovea_y
         )
         
         # Convert to JSON-serializable format

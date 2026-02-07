@@ -68,6 +68,8 @@ export async function segmentGA(
     disc_center_y?: number;
     disc_height_pixels?: number;
     en_face_split_x?: number;
+    fovea_x?: number;
+    fovea_y?: number;
   }
 ): Promise<GASegmentationResponse> {
   const formData = new FormData();
@@ -78,6 +80,8 @@ export async function segmentGA(
   if (options?.disc_center_y !== undefined) params.append('disc_center_y', options.disc_center_y.toString());
   if (options?.disc_height_pixels !== undefined) params.append('disc_height_pixels', options.disc_height_pixels.toString());
   if (options?.en_face_split_x !== undefined) params.append('en_face_split_x', options.en_face_split_x.toString());
+  if (options?.fovea_x !== undefined) params.append('fovea_x', options.fovea_x.toString());
+  if (options?.fovea_y !== undefined) params.append('fovea_y', options.fovea_y.toString());
 
   const url = `/segment-ga${params.toString() ? '?' + params.toString() : ''}`;
 

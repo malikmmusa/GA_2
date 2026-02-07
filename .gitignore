@@ -26,6 +26,14 @@ debug_ga_output/
 disc_mask_evaluation/
 input_images_marked/
 
+# Evaluation artifacts
+evaluation_*/
+raw_marked/
+
+# Debug/eval scripts
+src/debug_*.py
+src/eval_*.py
+
 # Output/Tmp
 tmp/
 temp/
