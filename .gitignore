@@ -13,12 +13,20 @@ env/
 .idea/
 .vscode/
 .claude/
+.cursor/
 
 # Large files/Models
 *.pth
 *.pt
 *.ckpt
 
+# Debug output
+debug_output/
+debug_ga_output/
+disc_mask_evaluation/
+input_images_marked/
+
 # Output/Tmp
 tmp/
 temp/
+output_results/

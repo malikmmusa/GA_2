@@ -10,12 +10,14 @@ interface ImageCanvasProps {
   imageAnalysis: ImageAnalysis | null;
   onFoveaClick?: (x: number, y: number) => void;
   onGARegionClick?: (regionIndex: number) => void;
+  foveaConfirmed?: boolean;
 }
 
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   imageAnalysis,
   onFoveaClick,
   onGARegionClick,
+  foveaConfirmed = false,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
@@ -100,8 +102,15 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
       ctx.stroke();
     }
 
-    // Draw GA regions (yellow outlines)
-    if (imageAnalysis.gaRegions?.regions) {
+    // Draw GA regions (filled masks with outlines for visibility)
+    console.log('[ImageCanvas] GA Visibility State:', {
+      hasGARegions: !!imageAnalysis.gaRegions,
+      regionCount: imageAnalysis.gaRegions?.region_count,
+      regionsArray: imageAnalysis.gaRegions?.regions?.length,
+      foveaConfirmed,
+    });
+    
+    if (imageAnalysis.gaRegions?.regions && foveaConfirmed) {
       imageAnalysis.gaRegions.regions.forEach((region, index) => {
         // Defensive check: ensure region is valid array with points
         if (!region || !Array.isArray(region) || region.length === 0) {
@@ -111,9 +120,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
         const isSelected = imageAnalysis.selectedGARegionIndex === index;
         const isHovered = hoveredRegionIndex === index;
 
-        ctx.strokeStyle = isSelected ? 'rgb(0, 255, 255)' : 'rgb(255, 255, 0)';
-        ctx.lineWidth = isHovered ? 3 : 2;
-
+        // Build the path
         ctx.beginPath();
         region.forEach((point, i) => {
           // Defensive check: ensure point has x and y coordinates
@@ -128,13 +135,24 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
           }
         });
         ctx.closePath();
-        ctx.stroke();
 
-        // Fill with semi-transparent color if selected
+        // Fill FIRST (always fill all regions for visibility)
         if (isSelected) {
-          ctx.fillStyle = 'rgba(0, 255, 255, 0.2)';
-          ctx.fill();
+          // Selected: cyan fill (more opaque)
+          ctx.fillStyle = 'rgba(0, 255, 255, 0.35)';
+        } else if (isHovered) {
+          // Hovered: bright yellow fill
+          ctx.fillStyle = 'rgba(255, 255, 0, 0.5)';
+        } else {
+          // Unselected: softer yellow fill
+          ctx.fillStyle = 'rgba(255, 255, 0, 0.3)';
         }
+        ctx.fill();
+
+        // Stroke SECOND (draw outline on top)
+        ctx.strokeStyle = isSelected ? 'rgb(0, 255, 255)' : 'rgb(255, 255, 0)';
+        ctx.lineWidth = isHovered ? 3 : 2;
+        ctx.stroke();
       });
     }
 
@@ -153,7 +171,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
       );
       ctx.stroke();
     }
-  }, [image, imageAnalysis, hoveredRegionIndex]);
+  }, [image, imageAnalysis, hoveredRegionIndex, foveaConfirmed]);
 
   // Handle canvas click
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -161,21 +179,31 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / scale;
-    const y = (e.clientY - rect.top) / scale;
+    
+    // Convert from screen pixels to original image pixels
+    // Account for both canvas internal scaling AND CSS scaling
+    const scaleX = image.width / rect.width;
+    const scaleY = image.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
 
-    // Check if clicked on a GA region
-    if (imageAnalysis.gaRegions?.regions && onGARegionClick) {
-      for (let i = 0; i < imageAnalysis.gaRegions.regions.length; i++) {
-        const region = imageAnalysis.gaRegions.regions[i];
-        if (region && isPointInPolygon(x, y, region)) {
-          onGARegionClick(i);
-          return;
+    // GATING LOGIC: After fovea is confirmed, ONLY allow GA selection
+    if (foveaConfirmed) {
+      // Only check GA regions, do NOT fall through to fovea adjustment
+      if (imageAnalysis.gaRegions?.regions && onGARegionClick) {
+        for (let i = 0; i < imageAnalysis.gaRegions.regions.length; i++) {
+          const region = imageAnalysis.gaRegions.regions[i];
+          if (region && isPointInPolygon(x, y, region)) {
+            onGARegionClick(i);
+            return;
+          }
         }
       }
+      // Fovea is confirmed - do not allow adjustment even if click misses GA
+      return;
     }
 
-    // Otherwise, treat as fovea adjustment click
+    // BEFORE confirmation: Allow fovea adjustment
     if (onFoveaClick) {
       onFoveaClick(x, y);
     }
@@ -187,8 +215,12 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / scale;
-    const y = (e.clientY - rect.top) / scale;
+    
+    // Convert from screen pixels to original image pixels
+    const scaleX = image.width / rect.width;
+    const scaleY = image.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
 
     // Check which region is hovered
     let foundIndex: number | null = null;
@@ -233,14 +265,28 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
             </p>
           )}
           {imageAnalysis.fovea && (
-            <p className="text-sm text-gray-600">
-              ✓ Fovea: {imageAnalysis.fovea.detection_method} ({imageAnalysis.fovea.eye_side})
-            </p>
+            <>
+              <p className="text-sm text-gray-600">
+                ✓ Fovea: {imageAnalysis.fovea.detection_method} ({imageAnalysis.fovea.eye_side})
+              </p>
+              {!foveaConfirmed && (
+                <p className="text-sm text-blue-600 font-semibold">
+                  👆 Click on image to adjust fovea location, then confirm below
+                </p>
+              )}
+            </>
           )}
           {imageAnalysis.gaRegions && (
-            <p className="text-sm text-gray-600">
-              ✓ GA regions: {imageAnalysis.gaRegions.region_count} detected
-            </p>
+            <>
+              <p className="text-sm text-gray-600">
+                ✓ GA regions: {imageAnalysis.gaRegions.region_count} detected
+              </p>
+              {foveaConfirmed && imageAnalysis.gaRegions.region_count > 0 && (
+                <p className="text-sm text-blue-600 font-semibold">
+                  👆 Click on a highlighted GA region to select it
+                </p>
+              )}
+            </>
           )}
           {imageAnalysis.distance && (
             <p className="text-sm font-semibold text-blue-600">

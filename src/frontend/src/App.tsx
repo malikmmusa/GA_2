@@ -20,6 +20,10 @@ function App() {
     error: null,
   });
 
+  // Track fovea confirmation state for each image
+  const [foveaConfirmedBefore, setFoveaConfirmedBefore] = useState(false);
+  const [foveaConfirmedAfter, setFoveaConfirmedAfter] = useState(false);
+
   /**
    * Cleanup URL.createObjectURL when component unmounts or images change
    * Prevents memory leaks
@@ -68,6 +72,13 @@ function App() {
     date: string,
     target: 'before' | 'after'
   ) => {
+    // Reset fovea confirmation state when uploading new image
+    if (target === 'before') {
+      setFoveaConfirmedBefore(false);
+    } else {
+      setFoveaConfirmedAfter(false);
+    }
+
     try {
       setState((prev) => ({ ...prev, isProcessing: true, error: null }));
 
@@ -97,31 +108,9 @@ function App() {
       });
       imageAnalysis.fovea = foveaResult;
 
-      // Step 3: Segment GA regions
-      console.log(`[${target}] Segmenting GA...`);
-      const gaResult = await api.segmentGA(file, {
-        disc_center_x: discResult.disc_center_x,
-        disc_center_y: discResult.disc_center_y,
-        disc_height_pixels: discResult.disc_height_pixels,
-        en_face_split_x: discResult.en_face_split_x,
-      });
-      imageAnalysis.gaRegions = gaResult;
-
-      // Auto-select the first (closest) GA region
-      if (gaResult.region_count > 0) {
-        imageAnalysis.selectedGARegionIndex = 0;
-
-        // Step 4: Calculate distance to selected GA region
-        console.log(`[${target}] Calculating distance...`);
-        const distanceResult = await api.calculateDistance({
-          fovea_x: foveaResult.fovea_x,
-          fovea_y: foveaResult.fovea_y,
-          selected_ga_region_index: 0,
-          ga_regions: gaResult.regions,
-          pixel_to_micron_ratio: discResult.pixel_to_micron_ratio,
-        });
-        imageAnalysis.distance = distanceResult;
-      }
+      console.log(`[${target}] Fovea detected. Waiting for user confirmation...`);
+      // STOP HERE - Do not auto-proceed to GA segmentation
+      // User must confirm fovea location before continuing
 
       // Update state (progression will be calculated by useEffect)
       setState((prev) => ({
@@ -140,6 +129,134 @@ function App() {
         error: extractErrorMessage(error, `Failed to process ${target} image`),
       }));
     }
+  };
+
+  /**
+   * Continue processing after fovea confirmation (Steps 3-4: GA segmentation + distance)
+   */
+  const continueAfterFoveaConfirmation = async (target: 'before' | 'after') => {
+    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+    
+    if (!imageAnalysis || !imageAnalysis.fovea || !imageAnalysis.disc || !imageAnalysis.imageFile) {
+      console.error(`[${target}] Cannot continue: missing fovea or disc data`);
+      return;
+    }
+
+    try {
+      setState((prev) => ({ ...prev, isProcessing: true, error: null }));
+
+      // Step 3: Segment GA regions
+      console.log(`[${target}] Segmenting GA...`);
+      console.log(`[${target}] GA Segmentation Input:`, {
+        hasImageFile: !!imageAnalysis.imageFile,
+        hasDisc: !!imageAnalysis.disc,
+        hasFovea: !!imageAnalysis.fovea,
+      });
+      
+      const gaResult = await api.segmentGA(imageAnalysis.imageFile, {
+        disc_center_x: imageAnalysis.disc.disc_center_x,
+        disc_center_y: imageAnalysis.disc.disc_center_y,
+        disc_height_pixels: imageAnalysis.disc.disc_height_pixels,
+        en_face_split_x: imageAnalysis.disc.en_face_split_x,
+      });
+      
+      console.log(`[${target}] GA Segmentation Result:`, {
+        regionCount: gaResult.region_count,
+        hasRegions: !!gaResult.regions,
+        regionsLength: gaResult.regions?.length,
+      });
+
+      // Create NEW object (immutable update) instead of mutating state reference
+      let updatedAnalysis: ImageAnalysis = {
+        ...imageAnalysis,
+        gaRegions: gaResult,
+      };
+
+      // Auto-select the first (closest) GA region if any exist
+      if (gaResult.region_count > 0) {
+        updatedAnalysis.selectedGARegionIndex = 0;
+
+        // Step 4: Calculate distance to selected GA region
+        console.log(`[${target}] Calculating distance...`);
+        const distanceResult = await api.calculateDistance({
+          fovea_x: imageAnalysis.fovea.fovea_x,
+          fovea_y: imageAnalysis.fovea.fovea_y,
+          selected_ga_region_index: 0,
+          ga_regions: gaResult.regions,
+          pixel_to_micron_ratio: imageAnalysis.disc.pixel_to_micron_ratio,
+        });
+        
+        updatedAnalysis = {
+          ...updatedAnalysis,
+          distance: distanceResult,
+        };
+      }
+
+      // Update state with NEW object reference (progression will be calculated by useEffect)
+      setState((prev) => ({
+        ...prev,
+        [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedAnalysis,
+        isProcessing: false,
+        progression: null, // Clear old progression to trigger recalculation
+      }));
+
+      console.log(`[${target}] GA segmentation and distance calculation complete!`);
+    } catch (error: any) {
+      console.error(`[${target}] Error:`, error);
+      setState((prev) => ({
+        ...prev,
+        isProcessing: false,
+        error: extractErrorMessage(error, `Failed to segment GA for ${target} image`),
+      }));
+    }
+  };
+
+  /**
+   * Handle fovea confirmation button click
+   */
+  const handleFoveaConfirm = async (target: 'before' | 'after') => {
+    if (target === 'before') {
+      setFoveaConfirmedBefore(true);
+    } else {
+      setFoveaConfirmedAfter(true);
+    }
+
+    // Continue to GA segmentation
+    await continueAfterFoveaConfirmation(target);
+  };
+
+  /**
+   * Handle fovea adjustment click
+   */
+  const handleFoveaAdjust = async (target: 'before' | 'after', x: number, y: number) => {
+    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+    const isConfirmed = target === 'before' ? foveaConfirmedBefore : foveaConfirmedAfter;
+
+    // Defense in depth: Block adjustment if fovea is already confirmed
+    if (isConfirmed) {
+      console.log(`[${target}] Fovea adjustment blocked - already confirmed`);
+      return;
+    }
+
+    if (!imageAnalysis?.fovea) return;
+
+    // Update fovea coordinates
+    const updatedImage: ImageAnalysis = {
+      ...imageAnalysis,
+      fovea: {
+        ...imageAnalysis.fovea,
+        fovea_x: x,
+        fovea_y: y,
+        detection_method: 'manual',
+      },
+    };
+
+    setState((prev) => ({
+      ...prev,
+      [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
+    }));
+
+    console.log(`[${target}] Fovea adjusted to (${x.toFixed(1)}, ${y.toFixed(1)})`);
   };
 
   /**
@@ -270,10 +387,25 @@ function App() {
             <div className="mt-4">
               <ImageCanvas
                 imageAnalysis={state.imageBefore}
+                onFoveaClick={(x, y) => handleFoveaAdjust('before', x, y)}
                 onGARegionClick={(regionIndex) =>
                   handleGARegionSelect('before', regionIndex)
                 }
+                foveaConfirmed={foveaConfirmedBefore}
               />
+              {/* Fovea Confirmation Button */}
+              {state.imageBefore?.fovea && !foveaConfirmedBefore && (
+                <button
+                  onClick={() => handleFoveaConfirm('before')}
+                  disabled={state.isProcessing}
+                  className="btn-primary w-full mt-4"
+                >
+                  Confirm Fovea Location & Continue
+                </button>
+              )}
+              {foveaConfirmedBefore && state.imageBefore?.fovea && (
+                <p className="text-sm text-green-600 mt-2">✓ Fovea confirmed</p>
+              )}
             </div>
           </div>
 
@@ -293,10 +425,25 @@ function App() {
             <div className="mt-4">
               <ImageCanvas
                 imageAnalysis={state.imageAfter}
+                onFoveaClick={(x, y) => handleFoveaAdjust('after', x, y)}
                 onGARegionClick={(regionIndex) =>
                   handleGARegionSelect('after', regionIndex)
                 }
+                foveaConfirmed={foveaConfirmedAfter}
               />
+              {/* Fovea Confirmation Button */}
+              {state.imageAfter?.fovea && !foveaConfirmedAfter && (
+                <button
+                  onClick={() => handleFoveaConfirm('after')}
+                  disabled={state.isProcessing}
+                  className="btn-primary w-full mt-4"
+                >
+                  Confirm Fovea Location & Continue
+                </button>
+              )}
+              {foveaConfirmedAfter && state.imageAfter?.fovea && (
+                <p className="text-sm text-green-600 mt-2">✓ Fovea confirmed</p>
+              )}
             </div>
           </div>
         </div>

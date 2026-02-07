@@ -38,9 +38,11 @@ Atrophy Advisor allows clinicians to upload two temporal OCT images (before and 
 
 | File | Purpose |
 |------|---------|
-| `src/run_interface.py` | Main web application entry point (TO BE CREATED) |
-| `src/run_analysis.py` | GA segmentation logic (K-means clustering) |
-| `src/run_inference.py` | Optic disc detection pipeline |
+| `src/api/main.py` | FastAPI application entry point |
+| `src/api/services/disc_detector.py` | Optic disc detection (RETFound U-Net) |
+| `src/api/services/ga_segmenter.py` | GA segmentation (K-means clustering) |
+| `src/api/services/fovea_detector.py` | Anatomy-aware fovea detection |
+| `src/api/services/calculator.py` | Distance & progression calculations |
 | `src/models/retfound_unet.py` | RETFound U-Net model architecture |
 | `src/utils/image_utils.py` | Image splitting, fovea detection utilities |
 | `weights/best_disc_model.pth` | Trained optic disc detection weights |
@@ -251,7 +253,7 @@ fovea_to_ga_distance_microns = fovea_to_ga_distance_pixels × pixel_to_micron_ra
 
 ---
 
-## File Structure (Planned)
+## Project Structure
 
 ```
 OCT_Project/
@@ -259,103 +261,66 @@ OCT_Project/
 │   ├── api/                      # FastAPI backend
 │   │   ├── main.py               # API entry point
 │   │   ├── routes/
-│   │   │   ├── upload.py         # Image upload endpoints
-│   │   │   ├── analysis.py       # Analysis endpoints
-│   │   │   └── report.py         # PDF generation endpoint
+│   │   │   ├── calculations.py   # Distance & progression endpoints
+│   │   │   ├── disc_detection.py # Optic disc detection endpoint
+│   │   │   ├── fovea_detection.py# Fovea detection endpoint
+│   │   │   └── ga_segmentation.py# GA segmentation endpoint
 │   │   └── services/
+│   │       ├── calculator.py     # Distance & progression calculator
 │   │       ├── disc_detector.py  # Optic disc detection service
 │   │       ├── fovea_detector.py # Fovea detection service
-│   │       ├── ga_segmenter.py   # GA segmentation service
-│   │       └── calculator.py     # Distance & progression calculator
+│   │       └── ga_segmenter.py   # GA segmentation service
 │   │
-│   ├── frontend/                 # React frontend
+│   ├── frontend/                 # React + TypeScript frontend
 │   │   ├── src/
 │   │   │   ├── components/
-│   │   │   │   ├── ImageUpload.tsx
+│   │   │   │   ├── ErrorBoundary.tsx
 │   │   │   │   ├── ImageCanvas.tsx
-│   │   │   │   ├── ResultsPanel.tsx
-│   │   │   │   └── PDFDownload.tsx
-│   │   │   ├── hooks/
-│   │   │   └── App.tsx
+│   │   │   │   ├── ImageUpload.tsx
+│   │   │   │   └── ResultsPanel.tsx
+│   │   │   ├── services/api.ts
+│   │   │   ├── types/api.ts
+│   │   │   ├── utils/errorHandling.ts
+│   │   │   ├── App.tsx
+│   │   │   └── main.tsx
 │   │   └── package.json
 │   │
 │   ├── models/                   # ML models
-│   │   ├── __init__.py
-│   │   └── retfound_unet.py
+│   │   └── retfound_unet.py     # RETFound U-Net architecture
 │   │
 │   ├── utils/                    # Shared utilities
-│   │   ├── __init__.py
-│   │   └── image_utils.py
+│   │   └── image_utils.py       # Image splitting, fovea detection
 │   │
-│   ├── run_analysis.py           # Legacy/reference (GA segmentation)
-│   └── run_inference.py          # Legacy/reference (disc detection)
+│   ├── run_analysis.py           # Legacy GA segmentation reference
+│   └── run_inference.py          # Legacy disc detection reference
 │
 ├── weights/
-│   └── best_disc_model.pth
+│   └── best_disc_model.pth       # Trained optic disc model
 │
+├── tests/                        # Test suite
+├── API_DOCUMENTATION.md          # API endpoint reference
+├── DEPLOYMENT_GUIDE.md           # Setup & deployment instructions
 ├── requirements.txt
-├── Dockerfile
 └── README.md
 ```
 
 ---
 
-## Development Phases
+## Running the Application
 
-### Phase 1: Backend API
-- [ ] Set up FastAPI project structure
-- [ ] Create image upload endpoint
-- [ ] Integrate optic disc detection (from run_inference.py)
-- [ ] Integrate fovea detection (from image_utils.py)
-- [ ] Integrate GA segmentation (from run_analysis.py)
-- [ ] Create distance calculation service
-- [ ] Create progression calculation service
-- [ ] Create PDF generation endpoint
-
-### Phase 2: Frontend UI
-- [ ] Set up React project with TypeScript
-- [ ] Create dual image upload component
-- [ ] Create interactive image canvas (click handling, hover effects)
-- [ ] Create date picker integration
-- [ ] Create eye selection dropdown
-- [ ] Create results display panel
-- [ ] Create PDF download button
-
-### Phase 3: Integration & Polish
-- [ ] Connect frontend to backend API
-- [ ] Add keyboard shortcuts (Enter to confirm)
-- [ ] Add loading states and progress indicators
-- [ ] Error handling and user feedback
-- [ ] Responsive design adjustments
-
-### Phase 4: Deployment
-- [ ] Create Dockerfile
-- [ ] Set up CI/CD pipeline
-- [ ] Deploy to cloud platform (TBD)
-- [ ] Performance optimization
-
----
-
-## Running the Application (Future)
+### Quick Start
 
 ```bash
-# Backend
-cd src/api
-pip install -r requirements.txt
-uvicorn main:app --reload
+# One-time setup
+./setup_environment.sh
 
-# Frontend
-cd src/frontend
-npm install
-npm run dev
+# Terminal 1: Start backend API
+./start_api.sh
+
+# Terminal 2: Start frontend
+./start_frontend.sh
+
+# Open browser to http://localhost:3000
 ```
 
----
-
-## Legacy Scripts Reference
-
-The following existing scripts contain logic that will be integrated:
-
-- **`src/run_inference.py`**: Optic disc detection pipeline using RETFound U-Net
-- **`src/run_analysis.py`**: GA segmentation using K-means clustering (`segment_macular_ga_kmeans`)
-- **`src/utils/image_utils.py`**: Image splitting, fovea detection, manual adjustment UI
+See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed setup and deployment instructions, and [API_DOCUMENTATION.md](API_DOCUMENTATION.md) for the full API reference.

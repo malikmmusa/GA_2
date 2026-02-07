@@ -91,7 +91,7 @@ class GASegmenterService:
         if disc_center_x_local is not None and disc_center_y is not None and disc_height_pixels is not None:
             # Create circular mask around disc
             disc_radius = int(disc_height_pixels * 0.6)  # Slightly larger than disc
-            mask = np.ones_like(enhanced)
+            mask = np.full_like(enhanced, 255)  # Full 8-bit mask (all bits set)
             cv2.circle(
                 mask,
                 (int(disc_center_x_local), int(disc_center_y)),
