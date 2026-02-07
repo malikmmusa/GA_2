@@ -2,7 +2,7 @@
  * ErrorBoundary Component
  * Catches React errors and displays them instead of white screen
  */
-import React, { Component, ErrorInfo, ReactNode } from 'react';
+import { Component, ErrorInfo, ReactNode } from 'react';
 
 interface Props {
   children: ReactNode;

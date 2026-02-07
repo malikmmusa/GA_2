@@ -13,6 +13,120 @@ interface ImageCanvasProps {
   foveaConfirmed?: boolean;
 }
 
+/**
+ * Helper function to draw annotated OCT image on a canvas
+ * Used by both inline canvas and modal canvas
+ */
+function drawAnnotatedImage(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  imageAnalysis: ImageAnalysis,
+  scale: number,
+  hoveredRegionIndex: number | null,
+  foveaConfirmed: boolean
+): void {
+  // Draw image
+  ctx.drawImage(image, 0, 0, image.width * scale, image.height * scale);
+
+  // Draw disc (red vertical line)
+  if (imageAnalysis.disc) {
+    ctx.strokeStyle = 'rgb(255, 0, 0)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(
+      imageAnalysis.disc.disc_center_x * scale,
+      imageAnalysis.disc.disc_top_y * scale
+    );
+    ctx.lineTo(
+      imageAnalysis.disc.disc_center_x * scale,
+      imageAnalysis.disc.disc_bottom_y * scale
+    );
+    ctx.stroke();
+  }
+
+  // Draw fovea (green circle)
+  if (imageAnalysis.fovea) {
+    ctx.fillStyle = 'rgb(0, 255, 0)';
+    ctx.beginPath();
+    ctx.arc(
+      imageAnalysis.fovea.fovea_x * scale,
+      imageAnalysis.fovea.fovea_y * scale,
+      10,
+      0,
+      2 * Math.PI
+    );
+    ctx.fill();
+
+    // White border
+    ctx.strokeStyle = 'white';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  // Draw GA regions (filled masks with outlines for visibility)
+  if (imageAnalysis.gaRegions?.regions && foveaConfirmed) {
+    imageAnalysis.gaRegions.regions.forEach((region, index) => {
+      // Defensive check: ensure region is valid array with points
+      if (!region || !Array.isArray(region) || region.length === 0) {
+        return;
+      }
+
+      const isSelected = imageAnalysis.selectedGARegionIndex === index;
+      const isHovered = hoveredRegionIndex === index;
+
+      // Build the path
+      ctx.beginPath();
+      region.forEach((point, i) => {
+        // Defensive check: ensure point has x and y coordinates
+        if (!point || point.length < 2) return;
+        
+        const x = point[0] * scale;
+        const y = point[1] * scale;
+        if (i === 0) {
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.closePath();
+
+      // Fill FIRST (always fill all regions for visibility)
+      if (isSelected) {
+        // Selected: cyan fill (more opaque)
+        ctx.fillStyle = 'rgba(0, 255, 255, 0.35)';
+      } else if (isHovered) {
+        // Hovered: bright yellow fill
+        ctx.fillStyle = 'rgba(255, 255, 0, 0.5)';
+      } else {
+        // Unselected: softer yellow fill
+        ctx.fillStyle = 'rgba(255, 255, 0, 0.3)';
+      }
+      ctx.fill();
+
+      // Stroke SECOND (draw outline on top)
+      ctx.strokeStyle = isSelected ? 'rgb(0, 255, 255)' : 'rgb(255, 255, 0)';
+      ctx.lineWidth = isHovered ? 3 : 2;
+      ctx.stroke();
+    });
+  }
+
+  // Draw distance measurement line (cyan)
+  if (imageAnalysis.distance && imageAnalysis.fovea) {
+    ctx.strokeStyle = 'rgb(0, 255, 255)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(
+      imageAnalysis.fovea.fovea_x * scale,
+      imageAnalysis.fovea.fovea_y * scale
+    );
+    ctx.lineTo(
+      imageAnalysis.distance.nearest_ga_point_x * scale,
+      imageAnalysis.distance.nearest_ga_point_y * scale
+    );
+    ctx.stroke();
+  }
+}
+
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   imageAnalysis,
   onFoveaClick,
@@ -20,9 +134,10 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   foveaConfirmed = false,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const modalCanvasRef = useRef<HTMLCanvasElement>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
-  const [scale, setScale] = useState<number>(1);
   const [hoveredRegionIndex, setHoveredRegionIndex] = useState<number | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
 
   // Load image
   useEffect(() => {
@@ -59,119 +174,47 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     // Set canvas size to fit container (max 800px width)
     const maxWidth = 800;
     const newScale = Math.min(maxWidth / image.width, 1);
-    setScale(newScale);
 
     canvas.width = image.width * newScale;
     canvas.height = image.height * newScale;
 
-    // Draw image
-    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-
-    // Draw disc (red vertical line)
-    if (imageAnalysis.disc) {
-      ctx.strokeStyle = 'rgb(255, 0, 0)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(
-        imageAnalysis.disc.disc_center_x * newScale,
-        imageAnalysis.disc.disc_top_y * newScale
-      );
-      ctx.lineTo(
-        imageAnalysis.disc.disc_center_x * newScale,
-        imageAnalysis.disc.disc_bottom_y * newScale
-      );
-      ctx.stroke();
-    }
-
-    // Draw fovea (green circle)
-    if (imageAnalysis.fovea) {
-      ctx.fillStyle = 'rgb(0, 255, 0)';
-      ctx.beginPath();
-      ctx.arc(
-        imageAnalysis.fovea.fovea_x * newScale,
-        imageAnalysis.fovea.fovea_y * newScale,
-        10,
-        0,
-        2 * Math.PI
-      );
-      ctx.fill();
-
-      // White border
-      ctx.strokeStyle = 'white';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-
-    // Draw GA regions (filled masks with outlines for visibility)
-    console.log('[ImageCanvas] GA Visibility State:', {
-      hasGARegions: !!imageAnalysis.gaRegions,
-      regionCount: imageAnalysis.gaRegions?.region_count,
-      regionsArray: imageAnalysis.gaRegions?.regions?.length,
-      foveaConfirmed,
-    });
-    
-    if (imageAnalysis.gaRegions?.regions && foveaConfirmed) {
-      imageAnalysis.gaRegions.regions.forEach((region, index) => {
-        // Defensive check: ensure region is valid array with points
-        if (!region || !Array.isArray(region) || region.length === 0) {
-          return;
-        }
-
-        const isSelected = imageAnalysis.selectedGARegionIndex === index;
-        const isHovered = hoveredRegionIndex === index;
-
-        // Build the path
-        ctx.beginPath();
-        region.forEach((point, i) => {
-          // Defensive check: ensure point has x and y coordinates
-          if (!point || point.length < 2) return;
-          
-          const x = point[0] * newScale;
-          const y = point[1] * newScale;
-          if (i === 0) {
-            ctx.moveTo(x, y);
-          } else {
-            ctx.lineTo(x, y);
-          }
-        });
-        ctx.closePath();
-
-        // Fill FIRST (always fill all regions for visibility)
-        if (isSelected) {
-          // Selected: cyan fill (more opaque)
-          ctx.fillStyle = 'rgba(0, 255, 255, 0.35)';
-        } else if (isHovered) {
-          // Hovered: bright yellow fill
-          ctx.fillStyle = 'rgba(255, 255, 0, 0.5)';
-        } else {
-          // Unselected: softer yellow fill
-          ctx.fillStyle = 'rgba(255, 255, 0, 0.3)';
-        }
-        ctx.fill();
-
-        // Stroke SECOND (draw outline on top)
-        ctx.strokeStyle = isSelected ? 'rgb(0, 255, 255)' : 'rgb(255, 255, 0)';
-        ctx.lineWidth = isHovered ? 3 : 2;
-        ctx.stroke();
-      });
-    }
-
-    // Draw distance measurement line (cyan)
-    if (imageAnalysis.distance && imageAnalysis.fovea) {
-      ctx.strokeStyle = 'rgb(0, 255, 255)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(
-        imageAnalysis.fovea.fovea_x * newScale,
-        imageAnalysis.fovea.fovea_y * newScale
-      );
-      ctx.lineTo(
-        imageAnalysis.distance.nearest_ga_point_x * newScale,
-        imageAnalysis.distance.nearest_ga_point_y * newScale
-      );
-      ctx.stroke();
-    }
+    // Use helper function to draw everything
+    drawAnnotatedImage(ctx, image, imageAnalysis, newScale, hoveredRegionIndex, foveaConfirmed);
   }, [image, imageAnalysis, hoveredRegionIndex, foveaConfirmed]);
+
+  // Draw modal canvas when modal is open
+  useEffect(() => {
+    if (!modalOpen || !modalCanvasRef.current || !image || !imageAnalysis) return;
+
+    const canvas = modalCanvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Calculate scale to fit viewport (90% of viewport size)
+    const scaleW = (window.innerWidth * 0.9) / image.width;
+    const scaleH = (window.innerHeight * 0.9) / image.height;
+    const modalScale = Math.min(scaleW, scaleH);
+
+    canvas.width = image.width * modalScale;
+    canvas.height = image.height * modalScale;
+
+    // Use helper function to draw everything
+    drawAnnotatedImage(ctx, image, imageAnalysis, modalScale, null, false);
+  }, [modalOpen, image, imageAnalysis, foveaConfirmed]);
+
+  // Handle Escape key to close modal
+  useEffect(() => {
+    if (!modalOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setModalOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [modalOpen]);
 
   // Handle canvas click
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -209,9 +252,46 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     }
   };
 
+  // Handle modal canvas click
+  const handleModalCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!modalCanvasRef.current || !imageAnalysis || !image || !onFoveaClick) return;
+
+    const canvas = modalCanvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    
+    // Convert from screen pixels to original image pixels
+    const scaleX = image.width / rect.width;
+    const scaleY = image.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+
+    // Place fovea at clicked position
+    onFoveaClick(x, y);
+
+    // Immediately redraw the modal canvas to show the updated fovea position
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const scaleW = (window.innerWidth * 0.9) / image.width;
+      const scaleH = (window.innerHeight * 0.9) / image.height;
+      const modalScale = Math.min(scaleW, scaleH);
+      
+      // Create updated imageAnalysis with new fovea position
+      const updatedAnalysis: ImageAnalysis = {
+        ...imageAnalysis,
+        fovea: imageAnalysis.fovea ? {
+          ...imageAnalysis.fovea,
+          fovea_x: x,
+          fovea_y: y,
+        } : undefined,
+      };
+      
+      drawAnnotatedImage(ctx, image, updatedAnalysis, modalScale, null, false);
+    }
+  };
+
   // Handle mouse move for hover effects
   const handleCanvasMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!canvasRef.current || !imageAnalysis?.gaRegions?.regions || !image) return;
+    if (!canvasRef.current || !image || !imageAnalysis?.gaRegions?.regions) return;
 
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
@@ -222,7 +302,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     const x = (e.clientX - rect.left) * scaleX;
     const y = (e.clientY - rect.top) * scaleY;
 
-    // Check which region is hovered
+    // Check which GA region is hovered
     let foundIndex: number | null = null;
     for (let i = 0; i < imageAnalysis.gaRegions.regions.length; i++) {
       const region = imageAnalysis.gaRegions.regions[i];
@@ -293,6 +373,53 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
               Distance: {imageAnalysis.distance.distance_microns.toFixed(1)} µm
             </p>
           )}
+        </div>
+      )}
+
+      {/* Expand Image Button - only shown before fovea confirmation */}
+      {imageAnalysis?.fovea && !foveaConfirmed && (
+        <button
+          onClick={() => setModalOpen(true)}
+          className="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded transition-colors"
+        >
+          🔍 Expand Image for Precise Fovea Placement
+        </button>
+      )}
+
+      {/* Full-Screen Modal */}
+      {modalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80"
+          onClick={(e) => {
+            // Close modal if clicking backdrop
+            if (e.target === e.currentTarget) {
+              setModalOpen(false);
+            }
+          }}
+        >
+          <div className="relative">
+            {/* Close button */}
+            <button
+              onClick={() => setModalOpen(false)}
+              className="absolute -top-12 right-0 text-white text-2xl font-bold hover:text-gray-300 transition-colors"
+              aria-label="Close modal"
+            >
+              ✕ Close
+            </button>
+            
+            {/* Modal Canvas */}
+            <canvas
+              ref={modalCanvasRef}
+              onClick={handleModalCanvasClick}
+              className="border-4 border-white rounded cursor-crosshair"
+              style={{ maxWidth: '90vw', maxHeight: '90vh' }}
+            />
+            
+            {/* Instructions */}
+            <p className="text-white text-center mt-4 text-lg">
+              Click on the image to place the fovea at the exact position
+            </p>
+          </div>
         </div>
       )}
     </div>

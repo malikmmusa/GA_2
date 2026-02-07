@@ -2,7 +2,7 @@
  * Main Application Component
  * Orchestrates the complete workflow for GA progression analysis
  */
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { ImageUpload } from './components/ImageUpload';
 import { ImageCanvas } from './components/ImageCanvas';
 import { ResultsPanel } from './components/ResultsPanel';
@@ -297,6 +297,29 @@ function App() {
   };
 
   /**
+   * Handle date change
+   */
+  const handleDateChange = (target: 'before' | 'after', newDate: string) => {
+    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+    
+    if (!imageAnalysis) return;
+
+    // Update the date in the ImageAnalysis object
+    const updatedImage: ImageAnalysis = {
+      ...imageAnalysis,
+      date: newDate,
+    };
+
+    setState((prev) => ({
+      ...prev,
+      [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
+      progression: null, // Clear progression to trigger recalculation
+    }));
+
+    console.log(`[${target}] Date updated to ${newDate}`);
+  };
+
+  /**
    * Handle GA region selection
    */
   const handleGARegionSelect = async (
@@ -376,6 +399,7 @@ function App() {
             <ImageUpload
               title="IMAGE 1 (BEFORE)"
               onImageUpload={(file, date) => processImage(file, date, 'before')}
+              onDateChange={(date) => handleDateChange('before', date)}
               currentDate={state.imageBefore?.date}
               eyeSide={state.imageBefore?.fovea?.eye_side}
               onEyeSideChange={(side) => {
@@ -414,6 +438,7 @@ function App() {
             <ImageUpload
               title="IMAGE 2 (AFTER)"
               onImageUpload={(file, date) => processImage(file, date, 'after')}
+              onDateChange={(date) => handleDateChange('after', date)}
               currentDate={state.imageAfter?.date}
               eyeSide={state.imageAfter?.fovea?.eye_side}
               onEyeSideChange={(side) => {

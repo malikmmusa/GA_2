@@ -7,6 +7,7 @@ import React, { useRef, useState } from 'react';
 interface ImageUploadProps {
   title: string;
   onImageUpload: (file: File, date: string) => void;
+  onDateChange?: (date: string) => void;
   currentDate?: string;
   eyeSide?: 'OD' | 'OS';
   onEyeSideChange?: (side: 'OD' | 'OS') => void;
@@ -16,6 +17,7 @@ interface ImageUploadProps {
 export const ImageUpload: React.FC<ImageUploadProps> = ({
   title,
   onImageUpload,
+  onDateChange,
   currentDate,
   eyeSide,
   onEyeSideChange,
@@ -72,9 +74,10 @@ export const ImageUpload: React.FC<ImageUploadProps> = ({
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const newDate = e.target.value;
     setSelectedDate(newDate);
-    // Note: Date change should update metadata, not re-upload
-    // For now, we don't re-trigger upload on date change to avoid crashes
-    // TODO: Implement date-only update endpoint in Phase 3
+    // Propagate date change to parent to update ImageAnalysis state
+    if (onDateChange) {
+      onDateChange(newDate);
+    }
   };
 
   return (
