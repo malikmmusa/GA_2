@@ -16,7 +16,8 @@ function App() {
     imageBefore: null,
     imageAfter: null,
     progression: null,
-    isProcessing: false,
+    isProcessingBefore: false,
+    isProcessingAfter: false,
     error: null,
   });
 
@@ -50,7 +51,8 @@ function App() {
       state.imageBefore?.fovea &&
       state.imageAfter?.fovea &&
       !state.progression &&
-      !state.isProcessing;
+      !state.isProcessingBefore &&
+      !state.isProcessingAfter;
 
     if (canCalculateProgression) {
       calculateProgression(state.imageBefore!, state.imageAfter!);
@@ -61,7 +63,8 @@ function App() {
     state.imageBefore?.fovea,
     state.imageAfter?.fovea,
     state.progression,
-    state.isProcessing,
+    state.isProcessingBefore,
+    state.isProcessingAfter,
   ]);
 
   /**
@@ -80,7 +83,11 @@ function App() {
     }
 
     try {
-      setState((prev) => ({ ...prev, isProcessing: true, error: null }));
+      setState((prev) => ({ 
+        ...prev, 
+        [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: true, 
+        error: null 
+      }));
 
       // Create image URL for display
       const imageUrl = URL.createObjectURL(file);
@@ -116,7 +123,7 @@ function App() {
       setState((prev) => ({
         ...prev,
         [target === 'before' ? 'imageBefore' : 'imageAfter']: imageAnalysis,
-        isProcessing: false,
+        [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: false,
         progression: null, // Clear old progression to trigger recalculation
       }));
 
@@ -125,7 +132,7 @@ function App() {
       console.error(`[${target}] Error:`, error);
       setState((prev) => ({
         ...prev,
-        isProcessing: false,
+        [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: false,
         error: extractErrorMessage(error, `Failed to process ${target} image`),
       }));
     }
@@ -143,7 +150,11 @@ function App() {
     }
 
     try {
-      setState((prev) => ({ ...prev, isProcessing: true, error: null }));
+      setState((prev) => ({ 
+        ...prev, 
+        [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: true, 
+        error: null 
+      }));
 
       // Step 3: Segment GA regions
       console.log(`[${target}] Segmenting GA...`);
@@ -196,7 +207,7 @@ function App() {
       setState((prev) => ({
         ...prev,
         [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedAnalysis,
-        isProcessing: false,
+        [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: false,
         progression: null, // Clear old progression to trigger recalculation
       }));
 
@@ -205,7 +216,7 @@ function App() {
       console.error(`[${target}] Error:`, error);
       setState((prev) => ({
         ...prev,
-        isProcessing: false,
+        [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: false,
         error: extractErrorMessage(error, `Failed to segment GA for ${target} image`),
       }));
     }
@@ -223,6 +234,21 @@ function App() {
 
     // Continue to GA segmentation
     await continueAfterFoveaConfirmation(target);
+  };
+
+  /**
+   * Handle unified fovea confirmation for both images
+   */
+  const handleConfirmBothFoveas = async () => {
+    // Set both confirmation states immediately
+    setFoveaConfirmedBefore(true);
+    setFoveaConfirmedAfter(true);
+
+    // Process both sides in parallel
+    await Promise.all([
+      continueAfterFoveaConfirmation('before'),
+      continueAfterFoveaConfirmation('after')
+    ]);
   };
 
   /**
@@ -406,7 +432,7 @@ function App() {
                 // Manual eye side override (would need API support)
                 console.log('Eye side override:', side);
               }}
-              isProcessing={state.isProcessing}
+              isProcessing={state.isProcessingBefore}
             />
             <div className="mt-4">
               <ImageCanvas
@@ -417,16 +443,6 @@ function App() {
                 }
                 foveaConfirmed={foveaConfirmedBefore}
               />
-              {/* Fovea Confirmation Button */}
-              {state.imageBefore?.fovea && !foveaConfirmedBefore && (
-                <button
-                  onClick={() => handleFoveaConfirm('before')}
-                  disabled={state.isProcessing}
-                  className="btn-primary w-full mt-4"
-                >
-                  Confirm Fovea Location & Continue
-                </button>
-              )}
               {foveaConfirmedBefore && state.imageBefore?.fovea && (
                 <p className="text-sm text-green-600 mt-2">✓ Fovea confirmed</p>
               )}
@@ -445,7 +461,7 @@ function App() {
                 // Manual eye side override (would need API support)
                 console.log('Eye side override:', side);
               }}
-              isProcessing={state.isProcessing}
+              isProcessing={state.isProcessingAfter}
             />
             <div className="mt-4">
               <ImageCanvas
@@ -456,22 +472,27 @@ function App() {
                 }
                 foveaConfirmed={foveaConfirmedAfter}
               />
-              {/* Fovea Confirmation Button */}
-              {state.imageAfter?.fovea && !foveaConfirmedAfter && (
-                <button
-                  onClick={() => handleFoveaConfirm('after')}
-                  disabled={state.isProcessing}
-                  className="btn-primary w-full mt-4"
-                >
-                  Confirm Fovea Location & Continue
-                </button>
-              )}
               {foveaConfirmedAfter && state.imageAfter?.fovea && (
                 <p className="text-sm text-green-600 mt-2">✓ Fovea confirmed</p>
               )}
             </div>
           </div>
         </div>
+
+        {/* Unified Fovea Confirmation Button */}
+        {state.imageBefore?.fovea && 
+         state.imageAfter?.fovea && 
+         (!foveaConfirmedBefore || !foveaConfirmedAfter) && (
+          <div className="mb-8">
+            <button
+              onClick={handleConfirmBothFoveas}
+              disabled={state.isProcessingBefore || state.isProcessingAfter}
+              className="btn-primary w-full max-w-2xl mx-auto block"
+            >
+              Confirm Fovea on Both Images & Continue
+            </button>
+          </div>
+        )}
 
         {/* Results Panel */}
         <ResultsPanel

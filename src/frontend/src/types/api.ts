@@ -87,6 +87,7 @@ export interface AppState {
   imageBefore: ImageAnalysis | null;
   imageAfter: ImageAnalysis | null;
   progression: ProgressionCalculationResponse | null;
-  isProcessing: boolean;
+  isProcessingBefore: boolean;
+  isProcessingAfter: boolean;
   error: string | null;
 }
