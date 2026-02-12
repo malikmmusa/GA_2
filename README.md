@@ -13,11 +13,52 @@ Atrophy Advisor allows clinicians to upload two temporal OCT images (before and 
 - **Automatic Eye Detection**: Auto-detects OD (right eye) vs OS (left eye) with manual override
 - **Optic Disc Detection**: RETFound U-Net model draws a red vertical line representing 1800 microns
 - **Fovea Detection**: Anatomy-aware auto-detection with interactive click-to-adjust
-- **GA Segmentation**: K-means clustering highlights multiple GA regions
+- **Image Registration**: Vessel-based alignment auto-transfers confirmed fovea from Image 1 to Image 2, with confidence scoring and manual override
+- **GA Segmentation**: K-means clustering with multi-channel features highlights GA regions
 - **Interactive Selection**: Hover to highlight GA regions, click to select
 - **Distance Calculation**: Measures fovea-to-GA distance in microns using optic disc as reference
 - **Progression Analysis**: Calculates rate of change and predicts foveal involvement date
 - **PDF Report**: Downloadable report with annotated images and calculations
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.8+ (with pip)
+- Node.js 18+ (with npm)
+- PyTorch 2.0+ (for MPS/CUDA support)
+- Trained model weights at `weights/best_disc_model.pth`
+
+### Setup
+
+```bash
+# 1. Clone the repository
+git clone <repository-url>
+cd OCT_Project
+
+# 2. Set up Python environment
+./setup_environment.sh
+
+# 3. Install frontend dependencies
+cd src/frontend && npm install && cd ../..
+```
+
+### Run
+
+```bash
+# Terminal 1: Start backend API
+./start_api.sh
+# Backend runs on http://localhost:8000
+# Interactive API docs at http://localhost:8000/docs
+
+# Terminal 2: Start frontend
+./start_frontend.sh
+# Frontend runs on http://localhost:3000
+```
+
+Open your browser to `http://localhost:3000`.
 
 ---
 
@@ -31,211 +72,152 @@ Atrophy Advisor allows clinicians to upload two temporal OCT images (before and 
 | **Frontend** | React + TypeScript | Component-based, production-ready, excellent ecosystem |
 | **ML Inference** | PyTorch | Existing RETFound U-Net model |
 | **Image Processing** | OpenCV, NumPy, SciPy | Existing pipeline compatibility |
-| **PDF Generation** | ReportLab or WeasyPrint | Professional PDF output |
-| **Deployment** | Docker + Cloud (TBD) | Portable, scalable |
+| **PDF Generation** | ReportLab | Professional PDF output |
+| **Styling** | Tailwind CSS | Utility-first, rapid UI development |
 
-### Key Files & Resources
+### Architecture Diagram
 
-| File | Purpose |
-|------|---------|
-| `src/api/main.py` | FastAPI application entry point |
-| `src/api/services/disc_detector.py` | Optic disc detection (RETFound U-Net) |
-| `src/api/services/ga_segmenter.py` | GA segmentation (K-means clustering) |
-| `src/api/services/fovea_detector.py` | Anatomy-aware fovea detection |
-| `src/api/services/calculator.py` | Distance & progression calculations |
-| `src/models/retfound_unet.py` | RETFound U-Net model architecture |
-| `src/utils/image_utils.py` | Image splitting, fovea detection utilities |
-| `weights/best_disc_model.pth` | Trained optic disc detection weights |
+```
+┌─────────────┐
+│   Browser    │  http://localhost:3000
+│  (React)     │
+└──────┬───────┘
+       │ API Requests (Axios)
+       ▼
+┌─────────────┐
+│  FastAPI     │  http://localhost:8000
+│  (Backend)   │
+└──────┬───────┘
+       │
+       ├── DiscDetectorService     → RETFound U-Net model
+       ├── FoveaDetectorService    → Anatomy-aware logic
+       ├── GASegmenterService      → K-means clustering
+       ├── ImageRegistrarService   → ORB feature matching + RANSAC
+       └── CalculatorService       → Distance & progression math
+```
+
+---
+
+## API Endpoints
+
+All endpoints are under the `/api` prefix. Interactive documentation is available at `/docs` (Swagger) and `/redoc` (ReDoc) when the server is running.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/detect-disc` | Upload OCT image, returns disc coordinates + 1800 µm reference line |
+| `POST` | `/api/detect-fovea` | Upload image + disc coords, returns fovea location + eye side |
+| `POST` | `/api/segment-ga` | Upload image, returns GA region contours |
+| `POST` | `/api/register-images` | Upload two images + landmarks, returns transformed fovea coords with confidence |
+| `POST` | `/api/calculate-distance` | Fovea coords + GA region, returns distance in pixels & microns |
+| `POST` | `/api/calculate-progression` | Before/after distances + dates, returns rate & predicted foveal involvement date |
+| `GET`  | `/health` | Health check |
+
+### Micron Calculation
+
+The optic disc vertical diameter is used as the anatomical reference:
+
+```
+Optic Disc Vertical Diameter ≈ 1800 µm (standard anatomical value)
+
+pixel_to_micron_ratio = 1800 / disc_height_pixels
+distance_microns = distance_pixels × pixel_to_micron_ratio
+```
 
 ---
 
 ## Application Workflow
 
-### Per-Image Processing (Independent)
+### Per-Image Processing
 
-Each image follows this workflow independently. Users can complete one image fully or switch between images at any point.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         IMAGE UPLOAD                            │
-│  User uploads OCT image (drag & drop or file picker)            │
-│  User selects date via date picker                              │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                       EYE DETECTION                             │
-│  System auto-detects OD/OS based on optic disc position         │
-│  Manual dropdown override available if detection is wrong       │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    OPTIC DISC DETECTION                         │
-│  RETFound U-Net generates heatmap                               │
-│  Red vertical line drawn (top to bottom of disc)                │
-│  Line length = 1800 microns (anatomical reference)              │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     FOVEA DETECTION                             │
-│  Anatomy-aware auto-detection (green line or geometric)         │
-│  Green marker displayed on image                                │
-│  User can CLICK to move fovea location                          │
-│  User confirms with "Confirm Location" button OR Enter key      │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      GA SEGMENTATION                            │
-│  K-means clustering identifies potential GA regions             │
-│  Multiple regions displayed with distinct outlines              │
-│  HOVER over region → highlight effect                           │
-│  CLICK on region → select it (visual confirmation)              │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   DISTANCE MEASUREMENT                          │
-│  Line drawn from fovea to NEAREST EDGE of selected GA           │
-│  Distance calculated in pixels                                  │
-│  Converted to microns: (pixels / disc_line_pixels) × 1800       │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Comparison & Prediction (Requires Both Images)
-
-Once both images are fully processed:
+Each image follows this pipeline independently:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      VALIDATION                                 │
-│  Check both images are from SAME EYE (OD/OD or OS/OS)           │
-│  If mismatch → Display warning, block calculation               │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   PROGRESSION CALCULATION                       │
-│                                                                 │
-│  distance_change = distance_before - distance_after             │
-│  time_elapsed = date_after - date_before                        │
-│                                                                 │
-│  IF distance_change > 0:                                        │
-│     rate = distance_change / time_elapsed (microns/day)         │
-│     predicted_date = date_after + (distance_after / rate)       │
-│                                                                 │
-│  IF distance_change == 0:                                       │
-│     Display "No progression detected"                           │
-│                                                                 │
-│  IF distance_change < 0:                                        │
-│     Display "Error: Negative progression detected"              │
-│     (GA appears further from fovea - likely measurement error)  │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      RESULTS DISPLAY                            │
-│  Show both annotated images side by side                        │
-│  Display: dates, distances, rate of change, predicted date      │
-│  "Download PDF Report" button                                   │
-└─────────────────────────────────────────────────────────────────┘
+Image Upload → Eye Detection (OD/OS) → Optic Disc Detection (RETFound U-Net)
+  → Fovea Detection (green line / geometric fallback) → User confirms fovea
+  → GA Segmentation (K-means) → User selects GA region → Distance measured
+```
+
+### Image Registration (Automatic)
+
+When Image 1 fovea is confirmed and Image 2 is uploaded:
+
+```
+Extract en-face regions → CLAHE vessel enhancement → ORB keypoint detection
+  → BFMatcher + Lowe's ratio test → RANSAC affine transform
+  → Transform fovea coordinates → Confidence-based behavior:
+     High (≥80%):  Auto-apply registered fovea
+     Moderate (40-79%): Show suggestion marker alongside auto-detected
+     Failed (<40%):  Silent fallback to independent detection
+```
+
+### Progression Analysis (Requires Both Images)
+
+```
+Validate same eye (OD/OD or OS/OS)
+  → distance_change = distance_before − distance_after
+  → rate = distance_change / time_elapsed
+  → predicted_date = date_after + (distance_after / rate)
 ```
 
 ---
 
-## UI Layout
+## Project Structure
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         ATROPHY ADVISOR                                  │
-│                        [Placeholder Logo]                                │
-├──────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  ┌─────────────────────────────┐    ┌─────────────────────────────┐      │
-│  │      IMAGE 1 (BEFORE)       │    │      IMAGE 2 (AFTER)        │      │
-│  │                             │    │                             │      │
-│  │  [Drag & Drop / Upload]     │    │  [Drag & Drop / Upload]     │      │
-│  │                             │    │                             │      │
-│  │  Date: [____Date Picker____]│    │  Date: [____Date Picker____]│      │
-│  │  Eye:  [Auto: OD ▼]         │    │  Eye:  [Auto: OS ▼]         │      │
-│  │                             │    │                             │      │
-│  │  ┌─────────────────────┐    │    │  ┌─────────────────────┐    │      │
-│  │  │                     │    │    │  │                     │    │      │
-│  │  │   [OCT Image with   │    │    │  │   [OCT Image with   │    │      │
-│  │  │    annotations]     │    │    │  │    annotations]     │    │      │
-│  │  │                     │    │    │  │                     │    │      │
-│  │  │  • Red line (disc)  │    │    │  │  • Red line (disc)  │    │      │
-│  │  │  • Green dot (fovea)│    │    │  │  • Green dot (fovea)│    │      │
-│  │  │  • Yellow GA regions│    │    │  │  • Yellow GA regions│    │      │
-│  │  │  • Cyan measurement │    │    │  │  • Cyan measurement │    │      │
-│  │  │                     │    │    │  │                     │    │      │
-│  │  └─────────────────────┘    │    │  └─────────────────────┘    │      │
-│  │                             │    │                             │      │
-│  │  Status: Fovea confirmed    │    │  Status: Select GA region   │      │
-│  │  Distance: 342 μm           │    │  Distance: --               │      │
-│  │                             │    │                             │      │
-│  │  [Confirm Fovea Location]   │    │  [Confirm Fovea Location]   │      │
-│  └─────────────────────────────┘    └─────────────────────────────┘      │
-│                                                                          │
-├──────────────────────────────────────────────────────────────────────────┤
-│                           RESULTS                                        │
-│  ┌────────────────────────────────────────────────────────────────────┐  │
-│  │                                                                    │  │
-│  │  Before Date:     01/15/2025         After Date:      07/20/2025   │  │
-│  │  Before Distance: 542 μm             After Distance:  342 μm       │  │
-│  │                                                                    │  │
-│  │  Time Elapsed:         186 days                                    │  │
-│  │  Distance Change:      200 μm                                      │  │
-│  │  Rate of Progression:  1.08 μm/day (32.3 μm/month)                 │  │
-│  │                                                                    │  │
-│  │  ⚠️  PREDICTED FOVEAL INVOLVEMENT: March 28, 2026                   │  │
-│  │                                                                    │  │
-│  │                      [Download PDF Report]                         │  │
-│  │                                                                    │  │
-│  └────────────────────────────────────────────────────────────────────┘  │
-│                                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## PDF Report Contents
-
-The downloadable PDF report includes:
-
-1. **Header**
-   - "Atrophy Advisor" title/logo (placeholder)
-   - Report generation date
-
-2. **Image Section**
-   - Before image (annotated) with date
-   - After image (annotated) with date
-   - Annotations include: red optic disc line, green fovea marker, yellow GA outline, cyan measurement line
-
-3. **Measurements**
-   - Eye: OD or OS
-   - Before distance: X μm
-   - After distance: Y μm
-
-4. **Analysis**
-   - Time between images
-   - Rate of progression (μm/day and μm/month)
-   - Predicted date of foveal involvement (or "No progression" / "Error" message)
-
----
-
-## Micron Calculation Reference
-
-The optic disc vertical diameter is used as the anatomical reference:
-
-```
-Optic Disc Vertical Diameter ≈ 1800 μm (standard anatomical value)
-
-pixel_to_micron_ratio = 1800 / disc_line_length_in_pixels
-
-fovea_to_ga_distance_microns = fovea_to_ga_distance_pixels × pixel_to_micron_ratio
+OCT_Project/
+├── src/
+│   ├── api/                          # FastAPI backend
+│   │   ├── main.py                   # Application entry point
+│   │   ├── models/
+│   │   │   └── schemas.py            # Pydantic request/response models
+│   │   ├── routes/
+│   │   │   ├── calculations.py       # Distance & progression endpoints
+│   │   │   ├── disc_detection.py     # Optic disc detection endpoint
+│   │   │   ├── fovea_detection.py    # Fovea detection endpoint
+│   │   │   ├── ga_segmentation.py    # GA segmentation endpoint
+│   │   │   └── registration.py       # Image registration endpoint
+│   │   └── services/
+│   │       ├── calculator.py         # Distance & progression logic
+│   │       ├── disc_detector.py      # RETFound U-Net disc detection
+│   │       ├── fovea_detector.py     # Anatomy-aware fovea detection
+│   │       ├── ga_segmenter.py       # K-means GA segmentation
+│   │       └── image_registrar.py    # ORB/RANSAC image registration
+│   │
+│   ├── frontend/                     # React + TypeScript frontend
+│   │   ├── src/
+│   │   │   ├── App.tsx               # Main application component
+│   │   │   ├── components/
+│   │   │   │   ├── ErrorBoundary.tsx  # Error handling wrapper
+│   │   │   │   ├── ImageCanvas.tsx    # Canvas rendering & interaction
+│   │   │   │   ├── ImageUpload.tsx    # Drag-and-drop upload
+│   │   │   │   └── ResultsPanel.tsx   # Results display
+│   │   │   ├── services/api.ts       # API client (Axios)
+│   │   │   ├── types/api.ts          # TypeScript interfaces
+│   │   │   └── utils/errorHandling.ts
+│   │   ├── package.json
+│   │   └── vite.config.ts
+│   │
+│   ├── models/
+│   │   └── retfound_unet.py          # RETFound U-Net architecture
+│   │
+│   └── utils/
+│       └── image_utils.py            # Image splitting, detection utilities
+│
+├── weights/
+│   └── best_disc_model.pth           # Trained optic disc model
+│
+├── tests/
+│   ├── test_disc_detector.py
+│   ├── test_disc_vs_ground_truth.py
+│   ├── test_ga_local_segmentation.py
+│   └── test_image_registration.py
+│
+├── input_images/                      # Sample OCT images
+├── requirements.txt
+├── setup_environment.sh
+├── start_api.sh
+├── start_frontend.sh
+└── README.md
 ```
 
 ---
@@ -248,79 +230,62 @@ fovea_to_ga_distance_microns = fovea_to_ga_distance_pixels × pixel_to_micron_ra
 | Eye mismatch (OD vs OS) | Block calculation, show warning |
 | No GA regions detected | Display message, allow manual retry |
 | No progression (same distance) | Display "No progression detected" |
-| Negative progression | Display "Error: Negative progression detected (check measurements)" |
+| Negative progression | Display error: check measurements |
+| Registration fails | Silent fallback to independent fovea detection |
 | Invalid/corrupt image | Display error, request valid image |
 
 ---
 
-## Project Structure
+## Development
 
+### Backend
+
+```bash
+source venv/bin/activate
+
+# Run tests
+pytest tests/ -v
+
+# Start with auto-reload
+cd src/api && python -m uvicorn main:app --reload --port 8000
 ```
-OCT_Project/
-├── src/
-│   ├── api/                      # FastAPI backend
-│   │   ├── main.py               # API entry point
-│   │   ├── routes/
-│   │   │   ├── calculations.py   # Distance & progression endpoints
-│   │   │   ├── disc_detection.py # Optic disc detection endpoint
-│   │   │   ├── fovea_detection.py# Fovea detection endpoint
-│   │   │   └── ga_segmentation.py# GA segmentation endpoint
-│   │   └── services/
-│   │       ├── calculator.py     # Distance & progression calculator
-│   │       ├── disc_detector.py  # Optic disc detection service
-│   │       ├── fovea_detector.py # Fovea detection service
-│   │       └── ga_segmenter.py   # GA segmentation service
-│   │
-│   ├── frontend/                 # React + TypeScript frontend
-│   │   ├── src/
-│   │   │   ├── components/
-│   │   │   │   ├── ErrorBoundary.tsx
-│   │   │   │   ├── ImageCanvas.tsx
-│   │   │   │   ├── ImageUpload.tsx
-│   │   │   │   └── ResultsPanel.tsx
-│   │   │   ├── services/api.ts
-│   │   │   ├── types/api.ts
-│   │   │   ├── utils/errorHandling.ts
-│   │   │   ├── App.tsx
-│   │   │   └── main.tsx
-│   │   └── package.json
-│   │
-│   ├── models/                   # ML models
-│   │   └── retfound_unet.py     # RETFound U-Net architecture
-│   │
-│   ├── utils/                    # Shared utilities
-│   │   └── image_utils.py       # Image splitting, fovea detection
-│   │
-│   ├── run_analysis.py           # Legacy GA segmentation reference
-│   └── run_inference.py          # Legacy disc detection reference
-│
-├── weights/
-│   └── best_disc_model.pth       # Trained optic disc model
-│
-├── tests/                        # Test suite
-├── API_DOCUMENTATION.md          # API endpoint reference
-├── DEPLOYMENT_GUIDE.md           # Setup & deployment instructions
-├── requirements.txt
-└── README.md
+
+### Frontend
+
+```bash
+cd src/frontend
+
+npm run dev       # Dev server with hot reload
+npm run build     # Production build
+npm run lint      # Lint check
 ```
+
+### Common Issues
+
+| Issue | Solution |
+|-------|----------|
+| `ModuleNotFoundError: No module named 'torch'` | `source venv/bin/activate && pip install -r requirements.txt` |
+| `FileNotFoundError: weights/best_disc_model.pth` | Obtain trained weights from the research team |
+| Frontend can't connect to backend | Ensure backend is running: `curl http://localhost:8000/health` |
+| `npm ERR! Cannot find module` | `cd src/frontend && rm -rf node_modules && npm install` |
 
 ---
 
-## Running the Application
+## Medical Constraints
 
-### Quick Start
+- **Optic disc vertical diameter** = 1800 µm (anatomical standard, used as reference for all measurements)
+- **Fovea-disc distance**: Expected 2-3 disc diameters temporal to disc (1.5-4.0 range)
+- **Progression validation**: Positive distance change = valid progression; negative = likely measurement error
+- **Eye matching**: Both images must be from the same eye (OD/OD or OS/OS)
 
-```bash
-# One-time setup
-./setup_environment.sh
+---
 
-# Terminal 1: Start backend API
-./start_api.sh
+## Security Notes
 
-# Terminal 2: Start frontend
-./start_frontend.sh
+**Current status: Development only.**
 
-# Open browser to http://localhost:3000
-```
+- No authentication
+- CORS allows all origins
+- No rate limiting
 
-See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed setup and deployment instructions, and [API_DOCUMENTATION.md](API_DOCUMENTATION.md) for the full API reference.
+Before production: add auth (JWT/OAuth), configure CORS, add rate limiting, use HTTPS.
