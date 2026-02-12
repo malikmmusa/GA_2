@@ -25,6 +25,18 @@ function App() {
   const [foveaConfirmedBefore, setFoveaConfirmedBefore] = useState(false);
   const [foveaConfirmedAfter, setFoveaConfirmedAfter] = useState(false);
 
+  // Track GA confirmation state for each image
+  const [gaConfirmedBefore, setGAConfirmedBefore] = useState(false);
+  const [gaConfirmedAfter, setGAConfirmedAfter] = useState(false);
+
+  // Track local GA segmentation processing state
+  const [isProcessingLocalGABefore, setIsProcessingLocalGABefore] = useState(false);
+  const [isProcessingLocalGAAfter, setIsProcessingLocalGAAfter] = useState(false);
+
+  // Track GA region selection messages
+  const [gaMessageBefore, setGAMessageBefore] = useState<string | null>(null);
+  const [gaMessageAfter, setGAMessageAfter] = useState<string | null>(null);
+
   /**
    * Cleanup URL.createObjectURL when component unmounts or images change
    * Prevents memory leaks
@@ -50,6 +62,8 @@ function App() {
       state.imageAfter?.distance &&
       state.imageBefore?.fovea &&
       state.imageAfter?.fovea &&
+      gaConfirmedBefore &&
+      gaConfirmedAfter &&
       !state.progression &&
       !state.isProcessingBefore &&
       !state.isProcessingAfter;
@@ -62,6 +76,8 @@ function App() {
     state.imageAfter?.distance,
     state.imageBefore?.fovea,
     state.imageAfter?.fovea,
+    gaConfirmedBefore,
+    gaConfirmedAfter,
     state.progression,
     state.isProcessingBefore,
     state.isProcessingAfter,
@@ -177,41 +193,21 @@ function App() {
         regionsLength: gaResult.regions?.length,
       });
 
-      // Create NEW object (immutable update) instead of mutating state reference
-      let updatedAnalysis: ImageAnalysis = {
+      // Store GA regions WITHOUT auto-selecting
+      const updatedAnalysis: ImageAnalysis = {
         ...imageAnalysis,
         gaRegions: gaResult,
       };
 
-      // Auto-select the first (closest) GA region if any exist
-      if (gaResult.region_count > 0) {
-        updatedAnalysis.selectedGARegionIndex = 0;
-
-        // Step 4: Calculate distance to selected GA region
-        console.log(`[${target}] Calculating distance...`);
-        const distanceResult = await api.calculateDistance({
-          fovea_x: imageAnalysis.fovea.fovea_x,
-          fovea_y: imageAnalysis.fovea.fovea_y,
-          selected_ga_region_index: 0,
-          ga_regions: gaResult.regions,
-          pixel_to_micron_ratio: imageAnalysis.disc.pixel_to_micron_ratio,
-        });
-        
-        updatedAnalysis = {
-          ...updatedAnalysis,
-          distance: distanceResult,
-        };
-      }
-
-      // Update state with NEW object reference (progression will be calculated by useEffect)
+      // Update state - user must click to select a region
       setState((prev) => ({
         ...prev,
         [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedAnalysis,
         [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: false,
-        progression: null, // Clear old progression to trigger recalculation
+        progression: null,
       }));
 
-      console.log(`[${target}] GA segmentation and distance calculation complete!`);
+      console.log(`[${target}] GA segmentation complete! User must click to select a region.`);
     } catch (error: any) {
       console.error(`[${target}] Error:`, error);
       setState((prev) => ({
@@ -286,6 +282,48 @@ function App() {
   };
 
   /**
+   * Handle disc adjustment (drag handles)
+   */
+  const handleDiscAdjust = (target: 'before' | 'after', centerX: number, topY: number, bottomY: number) => {
+    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+    const isConfirmed = target === 'before' ? foveaConfirmedBefore : foveaConfirmedAfter;
+
+    // Block adjustment if fovea is already confirmed
+    if (isConfirmed) {
+      console.log(`[${target}] Disc adjustment blocked - fovea already confirmed`);
+      return;
+    }
+
+    if (!imageAnalysis?.disc) return;
+
+    // Recalculate disc parameters
+    const disc_height_pixels = bottomY - topY;
+    const pixel_to_micron_ratio = 1800 / disc_height_pixels;
+    const disc_center_y = (topY + bottomY) / 2;
+
+    // Update disc coordinates
+    const updatedImage: ImageAnalysis = {
+      ...imageAnalysis,
+      disc: {
+        ...imageAnalysis.disc,
+        disc_center_x: centerX,
+        disc_center_y: disc_center_y,
+        disc_top_y: topY,
+        disc_bottom_y: bottomY,
+        disc_height_pixels: disc_height_pixels,
+        pixel_to_micron_ratio: pixel_to_micron_ratio,
+      },
+    };
+
+    setState((prev) => ({
+      ...prev,
+      [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
+    }));
+
+    console.log(`[${target}] Disc adjusted: height=${disc_height_pixels.toFixed(1)}px, ratio=${pixel_to_micron_ratio.toFixed(3)}µm/px`);
+  };
+
+  /**
    * Calculate progression between before and after images
    */
   const calculateProgression = async (
@@ -346,6 +384,38 @@ function App() {
   };
 
   /**
+   * Helper: Find nearest region to a point
+   */
+  const findNearestRegion = (
+    x: number,
+    y: number,
+    regions: Array<Array<[number, number]>>
+  ): { index: number; distance: number } | null => {
+    if (!regions || regions.length === 0) return null;
+
+    let minDistance = Infinity;
+    let nearestIndex = -1;
+
+    regions.forEach((region, index) => {
+      if (!region || region.length === 0) return;
+
+      // Calculate distance to all points in this region
+      region.forEach((point) => {
+        const dx = x - point[0];
+        const dy = y - point[1];
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance < minDistance) {
+          minDistance = distance;
+          nearestIndex = index;
+        }
+      });
+    });
+
+    return nearestIndex >= 0 ? { index: nearestIndex, distance: minDistance } : null;
+  };
+
+  /**
    * Handle GA region selection
    */
   const handleGARegionSelect = async (
@@ -379,6 +449,13 @@ function App() {
         [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
         progression: null, // Clear to trigger recalculation
       }));
+
+      // Clear any error messages
+      if (target === 'before') {
+        setGAMessageBefore(null);
+      } else {
+        setGAMessageAfter(null);
+      }
     } catch (error: any) {
       console.error('Error selecting GA region:', error);
       setState((prev) => ({
@@ -386,6 +463,138 @@ function App() {
         error: extractErrorMessage(error, 'Failed to calculate distance'),
       }));
     }
+  };
+
+  /**
+   * Handle GA area click (outside existing regions - triggers localized segmentation)
+   */
+  const handleGAAreaClick = async (target: 'before' | 'after', x: number, y: number) => {
+    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+    if (!imageAnalysis?.gaRegions || !imageAnalysis.disc || !imageAnalysis.fovea || !imageAnalysis.imageFile) {
+      return;
+    }
+
+    // First check if there's a nearby existing region
+    const nearest = findNearestRegion(x, y, imageAnalysis.gaRegions.regions);
+    if (nearest && nearest.distance < 50) {
+      // Click is close to an existing region, select it
+      console.log(`[${target}] Click near existing region ${nearest.index} (distance: ${nearest.distance.toFixed(1)}px)`);
+      await handleGARegionSelect(target, nearest.index);
+      return;
+    }
+
+    // No nearby region, try localized segmentation
+    try {
+      if (target === 'before') {
+        setIsProcessingLocalGABefore(true);
+        setGAMessageBefore(null);
+      } else {
+        setIsProcessingLocalGAAfter(true);
+        setGAMessageAfter(null);
+      }
+
+      console.log(`[${target}] Attempting local segmentation at (${x.toFixed(1)}, ${y.toFixed(1)})`);
+
+      const localResult = await api.segmentGALocal(
+        imageAnalysis.imageFile,
+        x,
+        y,
+        {
+          disc_center_x: imageAnalysis.disc.disc_center_x,
+          disc_center_y: imageAnalysis.disc.disc_center_y,
+          disc_height_pixels: imageAnalysis.disc.disc_height_pixels,
+          en_face_split_x: imageAnalysis.disc.en_face_split_x,
+        }
+      );
+
+      console.log(`[${target}] Local segmentation result: ${localResult.region_count} regions`);
+
+      if (localResult.region_count > 0) {
+        // Found a region! Add it to the existing regions
+        const newRegions = [...imageAnalysis.gaRegions.regions, ...localResult.regions];
+        const newRegionIndex = newRegions.length - 1;
+
+        // Calculate distance to the new region
+        const distanceResult = await api.calculateDistance({
+          fovea_x: imageAnalysis.fovea.fovea_x,
+          fovea_y: imageAnalysis.fovea.fovea_y,
+          selected_ga_region_index: newRegionIndex,
+          ga_regions: newRegions,
+          pixel_to_micron_ratio: imageAnalysis.disc.pixel_to_micron_ratio,
+        });
+
+        const updatedImage: ImageAnalysis = {
+          ...imageAnalysis,
+          gaRegions: {
+            regions: newRegions,
+            region_count: newRegions.length,
+          },
+          selectedGARegionIndex: newRegionIndex,
+          distance: distanceResult,
+        };
+
+        setState((prev) => ({
+          ...prev,
+          [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
+          progression: null,
+        }));
+
+        console.log(`[${target}] Local region added and selected`);
+      } else {
+        // No region found
+        const message = 'No GA detected in this area. Try clicking another spot.';
+        console.log(`[${target}] ${message}`);
+        
+        if (target === 'before') {
+          setGAMessageBefore(message);
+          setTimeout(() => setGAMessageBefore(null), 3000);
+        } else {
+          setGAMessageAfter(message);
+          setTimeout(() => setGAMessageAfter(null), 3000);
+        }
+      }
+    } catch (error: any) {
+      console.error(`[${target}] Local segmentation error:`, error);
+      setState((prev) => ({
+        ...prev,
+        error: extractErrorMessage(error, 'Local GA segmentation failed'),
+      }));
+    } finally {
+      if (target === 'before') {
+        setIsProcessingLocalGABefore(false);
+      } else {
+        setIsProcessingLocalGAAfter(false);
+      }
+    }
+  };
+
+  /**
+   * Handle GA retry (clear selection and let user click again)
+   */
+  const handleGARetry = (target: 'before' | 'after') => {
+    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+    if (!imageAnalysis) return;
+
+    const updatedImage: ImageAnalysis = {
+      ...imageAnalysis,
+      selectedGARegionIndex: undefined,
+      distance: undefined,
+    };
+
+    setState((prev) => ({
+      ...prev,
+      [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
+      progression: null,
+    }));
+
+    // Clear any messages
+    if (target === 'before') {
+      setGAMessageBefore(null);
+    } else {
+      setGAMessageAfter(null);
+    }
+
+    console.log(`[${target}] GA selection cleared, user can click again`);
   };
 
   /**
@@ -441,10 +650,38 @@ function App() {
                 onGARegionClick={(regionIndex) =>
                   handleGARegionSelect('before', regionIndex)
                 }
+                onGAAreaClick={(x, y) => handleGAAreaClick('before', x, y)}
+                onDiscAdjust={(centerX, topY, bottomY) => handleDiscAdjust('before', centerX, topY, bottomY)}
                 foveaConfirmed={foveaConfirmedBefore}
+                isProcessingGA={isProcessingLocalGABefore}
               />
               {foveaConfirmedBefore && state.imageBefore?.fovea && (
                 <p className="text-sm text-green-600 mt-2">✓ Fovea confirmed</p>
+              )}
+              {gaMessageBefore && (
+                <p className="text-sm text-orange-600 mt-2">{gaMessageBefore}</p>
+              )}
+              {/* GA Confirmation Buttons */}
+              {foveaConfirmedBefore && 
+               state.imageBefore?.selectedGARegionIndex !== undefined &&
+               !gaConfirmedBefore && (
+                <div className="mt-4 flex gap-2">
+                  <button
+                    onClick={() => setGAConfirmedBefore(true)}
+                    className="btn-primary flex-1"
+                  >
+                    Confirm GA Region
+                  </button>
+                  <button
+                    onClick={() => handleGARetry('before')}
+                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded transition-colors"
+                  >
+                    Try Again
+                  </button>
+                </div>
+              )}
+              {gaConfirmedBefore && (
+                <p className="text-sm text-green-600 mt-2">✓ GA region confirmed</p>
               )}
             </div>
           </div>
@@ -470,10 +707,38 @@ function App() {
                 onGARegionClick={(regionIndex) =>
                   handleGARegionSelect('after', regionIndex)
                 }
+                onGAAreaClick={(x, y) => handleGAAreaClick('after', x, y)}
+                onDiscAdjust={(centerX, topY, bottomY) => handleDiscAdjust('after', centerX, topY, bottomY)}
                 foveaConfirmed={foveaConfirmedAfter}
+                isProcessingGA={isProcessingLocalGAAfter}
               />
               {foveaConfirmedAfter && state.imageAfter?.fovea && (
                 <p className="text-sm text-green-600 mt-2">✓ Fovea confirmed</p>
+              )}
+              {gaMessageAfter && (
+                <p className="text-sm text-orange-600 mt-2">{gaMessageAfter}</p>
+              )}
+              {/* GA Confirmation Buttons */}
+              {foveaConfirmedAfter && 
+               state.imageAfter?.selectedGARegionIndex !== undefined &&
+               !gaConfirmedAfter && (
+                <div className="mt-4 flex gap-2">
+                  <button
+                    onClick={() => setGAConfirmedAfter(true)}
+                    className="btn-primary flex-1"
+                  >
+                    Confirm GA Region
+                  </button>
+                  <button
+                    onClick={() => handleGARetry('after')}
+                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded transition-colors"
+                  >
+                    Try Again
+                  </button>
+                </div>
+              )}
+              {gaConfirmedAfter && (
+                <p className="text-sm text-green-600 mt-2">✓ GA region confirmed</p>
               )}
             </div>
           </div>

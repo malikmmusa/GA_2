@@ -95,6 +95,42 @@ export async function segmentGA(
 }
 
 /**
+ * Segment GA region locally around a clicked point (fallback for missed regions)
+ */
+export async function segmentGALocal(
+  imageFile: File,
+  clickX: number,
+  clickY: number,
+  options?: {
+    disc_center_x?: number;
+    disc_center_y?: number;
+    disc_height_pixels?: number;
+    en_face_split_x?: number;
+  }
+): Promise<GASegmentationResponse> {
+  const formData = new FormData();
+  formData.append('file', imageFile);
+
+  const params = new URLSearchParams();
+  params.append('click_x', clickX.toString());
+  params.append('click_y', clickY.toString());
+  if (options?.disc_center_x !== undefined) params.append('disc_center_x', options.disc_center_x.toString());
+  if (options?.disc_center_y !== undefined) params.append('disc_center_y', options.disc_center_y.toString());
+  if (options?.disc_height_pixels !== undefined) params.append('disc_height_pixels', options.disc_height_pixels.toString());
+  if (options?.en_face_split_x !== undefined) params.append('en_face_split_x', options.en_face_split_x.toString());
+
+  const url = `/segment-ga-local?${params.toString()}`;
+
+  const response = await api.post<GASegmentationResponse>(url, formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+
+  return response.data;
+}
+
+/**
  * Calculate distance from fovea to GA region
  */
 export async function calculateDistance(

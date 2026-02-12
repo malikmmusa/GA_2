@@ -387,6 +387,233 @@ class GASegmenterService:
         
         return final_contours
     
+    def segment_ga_local(
+        self,
+        image: np.ndarray,
+        click_x: float,
+        click_y: float,
+        disc_center_x: Optional[float] = None,
+        disc_center_y: Optional[float] = None,
+        disc_height_pixels: Optional[float] = None,
+        en_face_split_x: Optional[int] = None,
+        crop_radius_multiplier: float = 2.5
+    ) -> List[np.ndarray]:
+        """
+        Segment GA region locally around a clicked point with relaxed parameters.
+        
+        This is a fallback method for when global segmentation misses a visible GA region.
+        Uses relaxed clustering and morphology parameters to catch smaller/dimmer lesions.
+        
+        Args:
+            image: Full composite OCT image (BGR)
+            click_x: X coordinate of user click (original image space)
+            click_y: Y coordinate of user click (original image space)
+            disc_center_x: Optional disc center X for masking and crop radius calculation
+            disc_center_y: Optional disc center Y for masking
+            disc_height_pixels: Optional disc height for crop radius calculation
+            en_face_split_x: Optional split point to extract en-face region
+            crop_radius_multiplier: Multiplier for crop radius (default: 2.5 * disc_height)
+        
+        Returns:
+            List containing 0 or 1 contour (numpy array) in original image coordinates
+        """
+        # Extract en-face region if split point provided
+        if en_face_split_x is not None:
+            en_face = image[:, en_face_split_x:, :]
+            # Adjust click coordinates to en-face space
+            click_x_local = click_x - en_face_split_x
+            click_y_local = click_y
+            # Adjust disc coordinates to en-face space
+            if disc_center_x is not None:
+                disc_center_x_local = disc_center_x - en_face_split_x
+            else:
+                disc_center_x_local = None
+        else:
+            en_face = image
+            click_x_local = click_x
+            click_y_local = click_y
+            disc_center_x_local = disc_center_x
+        
+        # Convert to grayscale
+        if len(en_face.shape) == 3:
+            gray = cv2.cvtColor(en_face, cv2.COLOR_BGR2GRAY)
+        else:
+            gray = en_face
+        
+        h, w = gray.shape
+        
+        # Determine crop radius
+        if disc_height_pixels is not None:
+            crop_radius = int(disc_height_pixels * crop_radius_multiplier)
+        else:
+            crop_radius = min(h, w) // 4  # Fallback: 1/4 of image size
+        
+        # Define crop bounds (clamped to image)
+        x1 = max(0, int(click_x_local - crop_radius))
+        x2 = min(w, int(click_x_local + crop_radius))
+        y1 = max(0, int(click_y_local - crop_radius))
+        y2 = min(h, int(click_y_local + crop_radius))
+        
+        # Crop region
+        gray_crop = gray[y1:y2, x1:x2]
+        
+        if gray_crop.size == 0:
+            print(f"  [GA-Local] Empty crop at ({click_x_local:.1f}, {click_y_local:.1f})")
+            return []
+        
+        print(f"  [GA-Local] Click: ({click_x_local:.1f}, {click_y_local:.1f}), Crop: [{x1}:{x2}, {y1}:{y2}], Size: {gray_crop.shape}")
+        
+        # Apply CLAHE enhancement
+        enhanced_crop = self._apply_clahe(gray_crop)
+        
+        # Mask out Optic Disc if coordinates provided and disc is in crop
+        disc_mask_crop = None
+        if disc_center_x_local is not None and disc_center_y is not None and disc_height_pixels is not None:
+            # Check if disc center is within crop bounds (with margin)
+            disc_radius = int(disc_height_pixels * self.disc_exclusion_multiplier)
+            if (x1 - disc_radius < disc_center_x_local < x2 + disc_radius and
+                y1 - disc_radius < disc_center_y < y2 + disc_radius):
+                # Create circular mask around disc in crop space
+                disc_mask_crop = np.zeros(gray_crop.shape, dtype=np.uint8)
+                disc_x_crop = int(disc_center_x_local - x1)
+                disc_y_crop = int(disc_center_y - y1)
+                cv2.circle(
+                    disc_mask_crop,
+                    (disc_x_crop, disc_y_crop),
+                    disc_radius,
+                    255,
+                    -1
+                )
+                disc_mask_flat = disc_mask_crop.reshape(-1) == 0
+                pixel_values = enhanced_crop.reshape((-1, 1)).astype(np.float32)
+                pixel_values_masked = pixel_values[disc_mask_flat]
+            else:
+                pixel_values = enhanced_crop.reshape((-1, 1)).astype(np.float32)
+                pixel_values_masked = pixel_values
+                disc_mask_flat = np.ones(len(pixel_values), dtype=bool)
+        else:
+            pixel_values = enhanced_crop.reshape((-1, 1)).astype(np.float32)
+            pixel_values_masked = pixel_values
+            disc_mask_flat = np.ones(len(pixel_values), dtype=bool)
+        
+        # Relaxed K-means: 4 clusters for finer separation
+        n_clusters_local = 4
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        _, labels_masked, centers = cv2.kmeans(
+            pixel_values_masked,
+            n_clusters_local,
+            None,
+            criteria,
+            10,
+            cv2.KMEANS_RANDOM_CENTERS
+        )
+        
+        # Map labels back to full crop
+        labels_crop = np.zeros(len(pixel_values), dtype=np.int32) - 1
+        labels_crop[disc_mask_flat] = labels_masked.flatten()
+        labels_crop = labels_crop.reshape(gray_crop.shape)
+        
+        # Determine which cluster the click pixel belongs to
+        click_x_crop = int(click_x_local - x1)
+        click_y_crop = int(click_y_local - y1)
+        
+        # Clamp click to crop bounds
+        click_x_crop = max(0, min(labels_crop.shape[1] - 1, click_x_crop))
+        click_y_crop = max(0, min(labels_crop.shape[0] - 1, click_y_crop))
+        
+        selected_cluster = labels_crop[click_y_crop, click_x_crop]
+        
+        if selected_cluster == -1:
+            # Click was on masked (disc) area
+            print(f"  [GA-Local] Click on masked area (disc)")
+            return []
+        
+        print(f"  [GA-Local] Selected cluster: {selected_cluster} (intensity: {centers[selected_cluster][0]:.1f})")
+        
+        # Create lesion mask from selected cluster
+        lesion_mask = (labels_crop == selected_cluster).astype(np.uint8) * 255
+        
+        # Relaxed morphological cleanup (smaller kernel)
+        kernel_size_local = 5
+        kernel = np.ones((kernel_size_local, kernel_size_local), np.uint8)
+        clean_mask = cv2.morphologyEx(lesion_mask, cv2.MORPH_OPEN, kernel)
+        clean_mask = cv2.morphologyEx(clean_mask, cv2.MORPH_CLOSE, kernel)
+        
+        # Find contours
+        contours_crop, _ = cv2.findContours(
+            clean_mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
+        
+        if not contours_crop:
+            print(f"  [GA-Local] No contours found after morphology")
+            return []
+        
+        # Relaxed filtering (lower min_area)
+        min_area_local = 100
+        valid_contours = []
+        
+        for cnt in contours_crop:
+            area = cv2.contourArea(cnt)
+            
+            if area < min_area_local:
+                continue
+            
+            # Circularity filter (reject circles)
+            perimeter = cv2.arcLength(cnt, True)
+            if perimeter == 0:
+                continue
+            circularity = 4 * np.pi * (area / (perimeter * perimeter))
+            if circularity > self.max_circularity:
+                continue
+            
+            valid_contours.append(cnt)
+        
+        if not valid_contours:
+            print(f"  [GA-Local] No valid contours after filtering")
+            return []
+        
+        # Find contour containing or nearest to click point
+        click_pt_crop = np.array([click_x_crop, click_y_crop])
+        best_contour = None
+        min_distance = float('inf')
+        
+        for cnt in valid_contours:
+            # Check if point is inside
+            dist = cv2.pointPolygonTest(cnt, (int(click_x_crop), int(click_y_crop)), True)
+            
+            if dist >= 0:
+                # Point is inside this contour
+                best_contour = cnt
+                break
+            else:
+                # Point is outside, measure distance to nearest point on contour
+                cnt_points = cnt.reshape(-1, 2)
+                distances = np.sqrt(np.sum((cnt_points - click_pt_crop)**2, axis=1))
+                nearest_dist = np.min(distances)
+                
+                if nearest_dist < min_distance:
+                    min_distance = nearest_dist
+                    best_contour = cnt
+        
+        if best_contour is None:
+            print(f"  [GA-Local] No contour found near click")
+            return []
+        
+        # Adjust contour back to en-face coordinates
+        adjusted = best_contour.copy()
+        adjusted[:, 0, 0] += x1
+        adjusted[:, 0, 1] += y1
+        
+        # Adjust back to original image coordinates if needed
+        if en_face_split_x is not None:
+            adjusted[:, 0, 0] += en_face_split_x
+        
+        print(f"  [GA-Local] Found region with area: {cv2.contourArea(best_contour):.0f} px²")
+        
+        return [adjusted]
+    
     def contours_to_json(self, contours: List[np.ndarray]) -> List[List[Tuple[int, int]]]:
         """
         Convert OpenCV contours to JSON-serializable format.
