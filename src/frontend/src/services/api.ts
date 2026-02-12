@@ -11,6 +11,7 @@ import type {
   DistanceCalculationResponse,
   ProgressionCalculationRequest,
   ProgressionCalculationResponse,
+  ImageRegistrationResponse,
 } from '../types/api';
 
 const API_BASE_URL = '/api';
@@ -147,5 +148,34 @@ export async function calculateProgression(
   request: ProgressionCalculationRequest
 ): Promise<ProgressionCalculationResponse> {
   const response = await api.post<ProgressionCalculationResponse>('/calculate-progression', request);
+  return response.data;
+}
+
+/**
+ * Register two images and transfer landmarks from reference to new image
+ */
+export async function registerImages(
+  referenceFile: File,
+  newFile: File,
+  request: {
+    en_face_split_x_ref: number;
+    en_face_split_x_new: number;
+    fovea_x: number;
+    fovea_y: number;
+    disc_center_x?: number;
+    disc_center_y?: number;
+  }
+): Promise<ImageRegistrationResponse> {
+  const formData = new FormData();
+  formData.append('file_reference', referenceFile);
+  formData.append('file_new', newFile);
+  formData.append('request_data', JSON.stringify(request));
+
+  const response = await api.post<ImageRegistrationResponse>('/register-images', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data',
+    },
+  });
+
   return response.data;
 }

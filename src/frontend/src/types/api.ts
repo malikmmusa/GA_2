@@ -66,6 +66,21 @@ export interface ProgressionCalculationResponse {
   predicted_foveal_involvement_date: string | null;
 }
 
+export interface ImageRegistrationResponse {
+  transformed_fovea_x: number;
+  transformed_fovea_y: number;
+  transformed_disc_center_x: number | null;
+  transformed_disc_center_y: number | null;
+  transform_matrix: number[] | null; // 2x3 affine: [a, b, tx, c, d, ty]
+  en_face_split_x_ref: number | null;
+  en_face_split_x_new: number | null;
+  confidence: number;
+  num_matches: number;
+  num_inliers: number;
+  status: 'success' | 'low_confidence' | 'failed';
+  message: string | null;
+}
+
 /**
  * Complete image analysis result
  */

@@ -7,7 +7,7 @@ import { ImageUpload } from './components/ImageUpload';
 import { ImageCanvas } from './components/ImageCanvas';
 import { ResultsPanel } from './components/ResultsPanel';
 import * as api from './services/api';
-import type { ImageAnalysis, AppState } from './types/api';
+import type { ImageAnalysis, AppState, ImageRegistrationResponse } from './types/api';
 import { extractErrorMessage } from './utils/errorHandling';
 import './index.css';
 
@@ -37,6 +37,10 @@ function App() {
   const [gaMessageBefore, setGAMessageBefore] = useState<string | null>(null);
   const [gaMessageAfter, setGAMessageAfter] = useState<string | null>(null);
 
+  // Track image registration state
+  const [registrationResult, setRegistrationResult] = useState<ImageRegistrationResponse | null>(null);
+  const [isRegistering, setIsRegistering] = useState(false);
+
   /**
    * Cleanup URL.createObjectURL when component unmounts or images change
    * Prevents memory leaks
@@ -51,6 +55,35 @@ function App() {
       }
     };
   }, [state.imageBefore?.imageUrl, state.imageAfter?.imageUrl]);
+
+  /**
+   * Auto-trigger registration when both images are loaded
+   * Runs once to get the transform matrix for live fovea transfer
+   */
+  useEffect(() => {
+    const canRegister =
+      state.imageBefore?.disc &&
+      state.imageBefore?.fovea &&
+      state.imageBefore?.imageFile &&
+      state.imageAfter?.disc &&
+      state.imageAfter?.fovea &&
+      state.imageAfter?.imageFile &&
+      !registrationResult &&
+      !isRegistering;
+
+    if (canRegister) {
+      attemptRegistration(state.imageBefore!, state.imageAfter!);
+    }
+  }, [
+    state.imageBefore?.disc,
+    state.imageBefore?.fovea,
+    state.imageBefore?.imageFile,
+    state.imageAfter?.disc,
+    state.imageAfter?.fovea,
+    state.imageAfter?.imageFile,
+    registrationResult,
+    isRegistering,
+  ]);
 
   /**
    * Auto-calculate progression when both images are ready
@@ -144,6 +177,9 @@ function App() {
       }));
 
       console.log(`[${target}] Analysis complete!`);
+
+      // NOTE: Registration is triggered automatically via useEffect when both images are loaded.
+      // Live fovea transfer happens during drag via handleFoveaAdjust + transform matrix.
     } catch (error: any) {
       console.error(`[${target}] Error:`, error);
       setState((prev) => ({
@@ -151,6 +187,108 @@ function App() {
         [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: false,
         error: extractErrorMessage(error, `Failed to process ${target} image`),
       }));
+    }
+  };
+
+  /**
+   * Apply the registration transform matrix to a point in Image 1 space,
+   * returning the corresponding point in Image 2 space.
+   * Pure math, no API call -- instant.
+   */
+  const applyTransformToFovea = (
+    foveaX: number,
+    foveaY: number,
+    reg: ImageRegistrationResponse
+  ): { x: number; y: number } | null => {
+    if (!reg.transform_matrix || reg.transform_matrix.length !== 6 ||
+        reg.en_face_split_x_ref == null || reg.en_face_split_x_new == null) {
+      return null;
+    }
+
+    const [a, b, tx, c, d, ty] = reg.transform_matrix;
+    const splitRef = reg.en_face_split_x_ref;
+    const splitNew = reg.en_face_split_x_new;
+
+    // Convert to en-face local coords
+    const localX = foveaX - splitRef;
+    const localY = foveaY;
+
+    // Apply 2x3 affine transform
+    const newLocalX = a * localX + b * localY + tx;
+    const newLocalY = c * localX + d * localY + ty;
+
+    // Convert back to original image coords
+    return {
+      x: newLocalX + splitNew,
+      y: newLocalY,
+    };
+  };
+
+  /**
+   * Attempt to register Image 2 to Image 1 and store the transform matrix.
+   * Called once when both images are loaded.
+   */
+  const attemptRegistration = async (
+    imageBefore: ImageAnalysis,
+    imageAfter: ImageAnalysis
+  ) => {
+    if (!imageBefore.imageFile || !imageAfter.imageFile || !imageBefore.fovea || !imageBefore.disc || !imageAfter.disc) {
+      console.log('[registration] Missing required data for registration');
+      return;
+    }
+
+    try {
+      setIsRegistering(true);
+      console.log('[registration] Starting registration...');
+
+      const result = await api.registerImages(
+        imageBefore.imageFile,
+        imageAfter.imageFile,
+        {
+          en_face_split_x_ref: imageBefore.disc.en_face_split_x,
+          en_face_split_x_new: imageAfter.disc.en_face_split_x,
+          fovea_x: imageBefore.fovea.fovea_x,
+          fovea_y: imageBefore.fovea.fovea_y,
+          disc_center_x: imageBefore.disc.disc_center_x,
+          disc_center_y: imageBefore.disc.disc_center_y,
+        }
+      );
+
+      setRegistrationResult(result);
+      console.log(`[registration] Result: ${result.status}, confidence: ${result.confidence.toFixed(2)}, hasMatrix: ${!!result.transform_matrix}`);
+
+      // If registration succeeded (any confidence), immediately apply the transform
+      // to update Image 2's fovea based on Image 1's current fovea
+      if (result.status !== 'failed' && result.transform_matrix) {
+        const transformed = applyTransformToFovea(
+          imageBefore.fovea.fovea_x,
+          imageBefore.fovea.fovea_y,
+          result
+        );
+
+        if (transformed) {
+          console.log(`[registration] Applying registered fovea to Image 2: (${transformed.x.toFixed(1)}, ${transformed.y.toFixed(1)})`);
+          setState((prev) => {
+            if (!prev.imageAfter?.fovea) return prev;
+            return {
+              ...prev,
+              imageAfter: {
+                ...prev.imageAfter,
+                fovea: {
+                  ...prev.imageAfter.fovea,
+                  fovea_x: transformed.x,
+                  fovea_y: transformed.y,
+                  detection_method: 'registered',
+                },
+              },
+            };
+          });
+        }
+      }
+    } catch (error: any) {
+      console.error('[registration] Error:', error);
+    } finally {
+      setIsRegistering(false);
     }
   };
 
@@ -193,19 +331,23 @@ function App() {
         regionsLength: gaResult.regions?.length,
       });
 
-      // Store GA regions WITHOUT auto-selecting
-      const updatedAnalysis: ImageAnalysis = {
-        ...imageAnalysis,
-        gaRegions: gaResult,
-      };
+      // Update state using functional updater to preserve any concurrent updates
+      // (e.g. registration may have updated the fovea on imageAfter)
+      setState((prev) => {
+        const stateKey = target === 'before' ? 'imageBefore' : 'imageAfter';
+        const latestImage = prev[stateKey];
+        if (!latestImage) return prev;
 
-      // Update state - user must click to select a region
-      setState((prev) => ({
-        ...prev,
-        [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedAnalysis,
-        [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: false,
-        progression: null,
-      }));
+        return {
+          ...prev,
+          [stateKey]: {
+            ...latestImage, // Uses latest state, preserves registered fovea
+            gaRegions: gaResult,
+          },
+          [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: false,
+          progression: null,
+        };
+      });
 
       console.log(`[${target}] GA segmentation complete! User must click to select a region.`);
     } catch (error: any) {
@@ -240,7 +382,9 @@ function App() {
     setFoveaConfirmedBefore(true);
     setFoveaConfirmedAfter(true);
 
-    // Process both sides in parallel
+    // Process both sides in parallel (GA segmentation)
+    // Registration already ran automatically when both images loaded,
+    // and fovea adjustments were applied live via transform matrix.
     await Promise.all([
       continueAfterFoveaConfirmation('before'),
       continueAfterFoveaConfirmation('after')
@@ -262,23 +406,39 @@ function App() {
 
     if (!imageAnalysis?.fovea) return;
 
-    // Update fovea coordinates
-    const updatedImage: ImageAnalysis = {
-      ...imageAnalysis,
-      fovea: {
-        ...imageAnalysis.fovea,
-        fovea_x: x,
-        fovea_y: y,
-        detection_method: 'manual',
-      },
-    };
+    // Update fovea coordinates for the adjusted image
+    setState((prev) => {
+      const updates: Partial<AppState> = {
+        [target === 'before' ? 'imageBefore' : 'imageAfter']: {
+          ...imageAnalysis,
+          fovea: {
+            ...imageAnalysis.fovea!,
+            fovea_x: x,
+            fovea_y: y,
+            detection_method: 'manual',
+          },
+        },
+      };
 
-    setState((prev) => ({
-      ...prev,
-      [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
-    }));
+      // LIVE REGISTRATION: When adjusting Image 1 and we have a transform matrix,
+      // instantly update Image 2's fovea using client-side affine math
+      if (target === 'before' && registrationResult?.transform_matrix && prev.imageAfter?.fovea) {
+        const transformed = applyTransformToFovea(x, y, registrationResult);
+        if (transformed) {
+          updates.imageAfter = {
+            ...prev.imageAfter,
+            fovea: {
+              ...prev.imageAfter.fovea,
+              fovea_x: transformed.x,
+              fovea_y: transformed.y,
+              detection_method: 'registered',
+            },
+          };
+        }
+      }
 
-    console.log(`[${target}] Fovea adjusted to (${x.toFixed(1)}, ${y.toFixed(1)})`);
+      return { ...prev, ...updates };
+    });
   };
 
   /**
@@ -301,26 +461,50 @@ function App() {
     const pixel_to_micron_ratio = 1800 / disc_height_pixels;
     const disc_center_y = (topY + bottomY) / 2;
 
-    // Update disc coordinates
-    const updatedImage: ImageAnalysis = {
-      ...imageAnalysis,
-      disc: {
-        ...imageAnalysis.disc,
-        disc_center_x: centerX,
-        disc_center_y: disc_center_y,
-        disc_top_y: topY,
-        disc_bottom_y: bottomY,
-        disc_height_pixels: disc_height_pixels,
-        pixel_to_micron_ratio: pixel_to_micron_ratio,
-      },
-    };
+    setState((prev) => {
+      const updates: Partial<AppState> = {
+        [target === 'before' ? 'imageBefore' : 'imageAfter']: {
+          ...imageAnalysis,
+          disc: {
+            ...imageAnalysis.disc!,
+            disc_center_x: centerX,
+            disc_center_y: disc_center_y,
+            disc_top_y: topY,
+            disc_bottom_y: bottomY,
+            disc_height_pixels: disc_height_pixels,
+            pixel_to_micron_ratio: pixel_to_micron_ratio,
+          },
+        },
+      };
 
-    setState((prev) => ({
-      ...prev,
-      [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
-    }));
+      // LIVE REGISTRATION: When adjusting Image 1's disc and we have a transform matrix,
+      // instantly update Image 2's disc position using client-side affine math
+      if (target === 'before' && registrationResult?.transform_matrix && prev.imageAfter?.disc) {
+        const transformedTop = applyTransformToFovea(centerX, topY, registrationResult);
+        const transformedBottom = applyTransformToFovea(centerX, bottomY, registrationResult);
 
-    console.log(`[${target}] Disc adjusted: height=${disc_height_pixels.toFixed(1)}px, ratio=${pixel_to_micron_ratio.toFixed(3)}µm/px`);
+        if (transformedTop && transformedBottom) {
+          const newHeight = transformedBottom.y - transformedTop.y;
+          const newRatio = newHeight > 0 ? 1800 / newHeight : prev.imageAfter.disc.pixel_to_micron_ratio;
+          const newCenterY = (transformedTop.y + transformedBottom.y) / 2;
+
+          updates.imageAfter = {
+            ...prev.imageAfter,
+            disc: {
+              ...prev.imageAfter.disc,
+              disc_center_x: transformedTop.x,
+              disc_center_y: newCenterY,
+              disc_top_y: transformedTop.y,
+              disc_bottom_y: transformedBottom.y,
+              disc_height_pixels: newHeight,
+              pixel_to_micron_ratio: newRatio,
+            },
+          };
+        }
+      }
+
+      return { ...prev, ...updates };
+    });
   };
 
   /**
@@ -711,9 +895,27 @@ function App() {
                 onDiscAdjust={(centerX, topY, bottomY) => handleDiscAdjust('after', centerX, topY, bottomY)}
                 foveaConfirmed={foveaConfirmedAfter}
                 isProcessingGA={isProcessingLocalGAAfter}
+                registrationSuggestion={registrationResult && registrationResult.status === 'low_confidence' ? {
+                  fovea_x: registrationResult.transformed_fovea_x,
+                  fovea_y: registrationResult.transformed_fovea_y,
+                } : undefined}
               />
               {foveaConfirmedAfter && state.imageAfter?.fovea && (
                 <p className="text-sm text-green-600 mt-2">✓ Fovea confirmed</p>
+              )}
+              {/* Registration status badge */}
+              {isRegistering && (
+                <p className="text-sm text-blue-600 mt-2">🔄 Aligning with Image 1...</p>
+              )}
+              {registrationResult && registrationResult.status === 'success' && (
+                <p className="text-sm text-green-600 mt-2 font-semibold">
+                  ✓ Fovea auto-aligned (high confidence: {(registrationResult.confidence * 100).toFixed(0)}%)
+                </p>
+              )}
+              {registrationResult && registrationResult.status === 'low_confidence' && (
+                <p className="text-sm text-yellow-600 mt-2 font-semibold">
+                  ⚠ Auto-aligned (moderate confidence: {(registrationResult.confidence * 100).toFixed(0)}%). Verify position.
+                </p>
               )}
               {gaMessageAfter && (
                 <p className="text-sm text-orange-600 mt-2">{gaMessageAfter}</p>

@@ -22,6 +22,10 @@ interface ImageCanvasProps {
   onDiscAdjust?: (centerX: number, topY: number, bottomY: number) => void;
   foveaConfirmed?: boolean;
   isProcessingGA?: boolean;
+  registrationSuggestion?: {
+    fovea_x: number;
+    fovea_y: number;
+  };
 }
 
 /**
@@ -92,7 +96,8 @@ function drawAnnotatedImage(
   scale: number,
   hoveredRegionIndex: number | null,
   foveaConfirmed: boolean,
-  hoveredDiscZone: 'top' | 'bottom' | 'body' | null = null
+  hoveredDiscZone: 'top' | 'bottom' | 'body' | null = null,
+  registrationSuggestion?: { fovea_x: number; fovea_y: number }
 ): void {
   // Draw image
   ctx.drawImage(image, 0, 0, image.width * scale, image.height * scale);
@@ -153,6 +158,25 @@ function drawAnnotatedImage(
       ctx.stroke();
       ctx.globalAlpha = 1.0;
     }
+  }
+
+  // Draw registration suggestion (yellow circle) if present and not confirmed
+  if (registrationSuggestion && !foveaConfirmed) {
+    ctx.fillStyle = 'rgba(255, 255, 0, 0.7)';
+    ctx.beginPath();
+    ctx.arc(
+      registrationSuggestion.fovea_x * scale,
+      registrationSuggestion.fovea_y * scale,
+      FOVEA_RADIUS + 2,
+      0,
+      2 * Math.PI
+    );
+    ctx.fill();
+
+    // Orange border
+    ctx.strokeStyle = 'rgb(255, 165, 0)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
   }
 
   // Draw fovea (green circle)
@@ -233,6 +257,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   onDiscAdjust,
   foveaConfirmed = false,
   isProcessingGA = false,
+  registrationSuggestion,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const modalCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -294,8 +319,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     canvas.height = image.height * newScale;
 
     // Use helper function to draw everything
-    drawAnnotatedImage(ctx, image, imageAnalysis, newScale, hoveredRegionIndex, foveaConfirmed, hoveredDiscZone);
-  }, [image, imageAnalysis, hoveredRegionIndex, foveaConfirmed, hoveredDiscZone]);
+    drawAnnotatedImage(ctx, image, imageAnalysis, newScale, hoveredRegionIndex, foveaConfirmed, hoveredDiscZone, registrationSuggestion);
+  }, [image, imageAnalysis, hoveredRegionIndex, foveaConfirmed, hoveredDiscZone, registrationSuggestion]);
 
   // Draw modal canvas when modal is open
   useEffect(() => {

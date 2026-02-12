@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
 
-from .routes import disc_detection, fovea_detection, ga_segmentation, calculations
+from .routes import disc_detection, fovea_detection, ga_segmentation, calculations, registration
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -47,6 +47,12 @@ app.include_router(
     calculations.router,
     prefix="/api",
     tags=["Calculations"]
+)
+
+app.include_router(
+    registration.router,
+    prefix="/api",
+    tags=["Registration"]
 )
 
 @app.get("/")

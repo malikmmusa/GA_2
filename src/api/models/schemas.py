@@ -94,3 +94,20 @@ class ProgressionCalculationResponse(BaseModel):
     predicted_foveal_involvement_date: Optional[str] = None
     status: str = Field(..., description="'progression', 'no_progression', or 'error'")
     error_message: Optional[str] = None
+
+
+class ImageRegistrationResponse(BaseModel):
+    """Response model for image registration and landmark transfer."""
+    
+    transformed_fovea_x: float = Field(..., description="Fovea X coordinate in Image 2 space after registration")
+    transformed_fovea_y: float = Field(..., description="Fovea Y coordinate in Image 2 space after registration")
+    transformed_disc_center_x: Optional[float] = Field(None, description="Disc center X in Image 2 space (for validation)")
+    transformed_disc_center_y: Optional[float] = Field(None, description="Disc center Y in Image 2 space (for validation)")
+    transform_matrix: Optional[List[float]] = Field(None, description="2x3 affine matrix as 6 floats [a,b,tx,c,d,ty] for client-side transform")
+    en_face_split_x_ref: Optional[int] = Field(None, description="En-face split X used for reference image")
+    en_face_split_x_new: Optional[int] = Field(None, description="En-face split X used for new image")
+    confidence: float = Field(..., description="Registration confidence score (0.0-1.0)")
+    num_matches: int = Field(..., description="Number of good feature matches found")
+    num_inliers: int = Field(..., description="Number of inliers after RANSAC")
+    status: str = Field(..., description="'success', 'low_confidence', or 'failed'")
+    message: Optional[str] = Field(None, description="Human-readable status message")
