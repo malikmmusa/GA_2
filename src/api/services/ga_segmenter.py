@@ -9,6 +9,8 @@ import os
 # Import legacy utilities
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
+from src.api.services.sam_refiner import SAMRefiner
+
 
 class GASegmenterService:
     """
@@ -31,7 +33,8 @@ class GASegmenterService:
         max_regions: Optional[int] = None,
         disc_exclusion_multiplier: float = 0.6,
         clahe_clip_limit: float = 3.0,
-        morph_kernel_size: int = 11
+        morph_kernel_size: int = 11,
+        use_sam: bool = True,
     ):
         """
         Initialize GA segmentation service.
@@ -54,6 +57,8 @@ class GASegmenterService:
         self.disc_exclusion_multiplier = disc_exclusion_multiplier
         self.clahe_clip_limit = clahe_clip_limit
         self.morph_kernel_size = morph_kernel_size
+        self.use_sam = use_sam
+        self._sam = SAMRefiner()
     
     def _apply_clahe(self, gray: np.ndarray) -> np.ndarray:
         """
@@ -321,7 +326,18 @@ class GASegmenterService:
         
         if not contours:
             return []
-        
+
+        # SAM refinement: replace K-means contours with SAM-refined ones
+        if self.use_sam and self._sam.available and contours:
+            boxes = []
+            for cnt in contours:
+                x, y, w_box, h_box = cv2.boundingRect(cnt)
+                boxes.append(np.array([x, y, x + w_box, y + h_box]))
+            self._sam.set_image(en_face)
+            sam_results = self._sam.refine_candidates(boxes)
+            if sam_results:
+                contours = [r["contour"] for r in sam_results]
+
         # Filter and score contours
         candidates = []
         
