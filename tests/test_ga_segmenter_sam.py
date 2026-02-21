@@ -181,5 +181,33 @@ class TestGASegmenterAPIContract(unittest.TestCase):
             self.assertIsInstance(item, np.ndarray)
 
 
+# ---------------------------------------------------------------------------
+# Group 5 — RGB conversion before SAM set_image
+# ---------------------------------------------------------------------------
+
+class TestGASegmenterRGBConversion(unittest.TestCase):
+
+    @patch("src.api.services.ga_segmenter.SAMRefiner")
+    def test_segment_ga_regions_passes_rgb_to_sam_set_image(self, MockSAMRefiner):
+        """set_image() is called with an RGB image (not BGR) — first channel != third for non-grey images."""
+        mock_sam = _make_mock_sam(available=True)
+        MockSAMRefiner.return_value = mock_sam
+
+        # Create image with R != B to distinguish RGB vs BGR
+        img = np.zeros((200, 200, 3), dtype=np.uint8)
+        img[60:140, 60:140, 0] = 200  # B channel high in BGR
+        img[60:140, 60:140, 2] = 50   # R channel low in BGR
+        # After BGR→RGB: channel 0 = 50, channel 2 = 200
+
+        seg = GASegmenterService()
+        seg.segment_ga_regions(img)
+
+        self.assertTrue(mock_sam.set_image.called)
+        passed_image = mock_sam.set_image.call_args[0][0]
+        # In the passed RGB image, channel 0 (R) should be 50, channel 2 (B) should be 200
+        self.assertEqual(int(passed_image[100, 100, 0]), 50)   # R channel
+        self.assertEqual(int(passed_image[100, 100, 2]), 200)  # B channel
+
+
 if __name__ == "__main__":
     unittest.main()

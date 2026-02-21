@@ -48,6 +48,7 @@ class GASegmenterService:
             disc_exclusion_multiplier: Disc masking radius multiplier (default: 0.6)
             clahe_clip_limit: CLAHE clip limit (default: 3.0)
             morph_kernel_size: Morphological operations kernel size (default: 11)
+            use_sam: Whether to refine K-means contours with SAM2 (default: True)
         """
         self.n_clusters = n_clusters
         self.min_area = min_area
@@ -58,7 +59,7 @@ class GASegmenterService:
         self.clahe_clip_limit = clahe_clip_limit
         self.morph_kernel_size = morph_kernel_size
         self.use_sam = use_sam
-        self._sam = SAMRefiner()
+        self._sam = SAMRefiner() if use_sam else None
     
     def _apply_clahe(self, gray: np.ndarray) -> np.ndarray:
         """
@@ -327,13 +328,13 @@ class GASegmenterService:
         if not contours:
             return []
 
-        # SAM refinement: replace K-means contours with SAM-refined ones
-        if self.use_sam and self._sam.available and contours:
+        if self.use_sam and self._sam is not None and self._sam.available:
             boxes = []
             for cnt in contours:
                 x, y, w_box, h_box = cv2.boundingRect(cnt)
                 boxes.append(np.array([x, y, x + w_box, y + h_box]))
-            self._sam.set_image(en_face)
+            en_face_rgb = cv2.cvtColor(en_face, cv2.COLOR_BGR2RGB) if len(en_face.shape) == 3 else en_face
+            self._sam.set_image(en_face_rgb)
             sam_results = self._sam.refine_candidates(boxes)
             if sam_results:
                 contours = [r["contour"] for r in sam_results]
