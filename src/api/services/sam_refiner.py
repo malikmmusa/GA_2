@@ -4,7 +4,7 @@ from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
-import torch
+import torch  # required for device detection (mps/cuda) and SAM2 internals
 
 from sam2.build_sam import build_sam2
 from sam2.sam2_image_predictor import SAM2ImagePredictor
@@ -68,11 +68,10 @@ class SAMRefiner:
             masks, scores, _ = self.predictor.predict(box=box, multimask_output=False)
             if len(masks) == 0:
                 continue
-            iou = float(scores[0][0])
+            iou = float(scores[0])
             if iou < min_iou:
                 continue
-            # masks may be (N,1,H,W) or (N,H,W)
-            mask_2d = masks[0].squeeze()
+            mask_2d = masks[0] > 0.5
             results.append({"mask": mask_2d, "iou": iou, "contour": _extract_contour(mask_2d)})
 
         return results
@@ -95,6 +94,6 @@ class SAMRefiner:
         )
         if len(masks) == 0:
             return None
-        iou = float(scores[0][0])
-        mask_2d = masks[0].squeeze()
+        iou = float(scores[0])
+        mask_2d = masks[0] > 0.5
         return {"mask": mask_2d, "iou": iou, "contour": _extract_contour(mask_2d)}

@@ -1,15 +1,13 @@
 """
-RED phase — TDD tests for SAMRefiner.
+Tests for SAMRefiner.
 
-All tests in this file are expected to FAIL with:
-    ModuleNotFoundError: No module named 'src.api.services.sam_refiner'
-
-Do NOT create sam_refiner.py until GREEN phase is approved.
+Mock shapes match real SAM2 predictor output:
+  masks  → (num_masks, H, W)  float32
+  scores → (num_masks,)       float32  1-D numpy array
 """
 import os
 import sys
 import numpy as np
-import torch
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -25,16 +23,17 @@ from src.api.services.sam_refiner import SAMRefiner  # noqa: E402  — fails unt
 H, W = 50, 50
 
 def _fake_mask() -> np.ndarray:
-    """SAM2 predictor returns shape (num_masks, 1, H, W) bool array."""
-    return np.ones((1, 1, H, W), dtype=bool)
+    """Real SAM2 returns (num_masks, H, W) float32."""
+    return np.ones((1, H, W), dtype=np.float32)
 
 
-def _fake_scores() -> torch.Tensor:
-    return torch.tensor([[0.9]])
+def _fake_scores() -> np.ndarray:
+    """Real SAM2 returns 1-D float32 array, one score per mask."""
+    return np.array([0.9], dtype=np.float32)
 
 
-def _fake_scores_low() -> torch.Tensor:
-    return torch.tensor([[0.5]])
+def _fake_scores_low() -> np.ndarray:
+    return np.array([0.5], dtype=np.float32)
 
 
 def _make_available_refiner() -> SAMRefiner:
@@ -135,7 +134,11 @@ class TestSAMRefinerCandidates(unittest.TestCase):
     def test_refine_candidates_handles_empty_predictor_output(self):
         """If predictor returns empty masks/scores, result is silently skipped."""
         refiner = _make_available_refiner()
-        refiner.predictor.predict.return_value = (np.zeros((0, 1, H, W), dtype=bool), torch.tensor([[]]), None)
+        refiner.predictor.predict.return_value = (
+            np.zeros((0, H, W), dtype=np.float32),
+            np.array([], dtype=np.float32),
+            None,
+        )
         boxes = [np.array([5, 5, 45, 45])]
         # Must not raise IndexError
         result = refiner.refine_candidates(boxes)
@@ -166,7 +169,11 @@ class TestSAMRefinerPoint(unittest.TestCase):
     def test_refine_point_handles_empty_predictor_output(self):
         """If predictor returns empty masks/scores, returns None."""
         refiner = _make_available_refiner()
-        refiner.predictor.predict.return_value = (np.zeros((0, 1, H, W), dtype=bool), torch.tensor([[]]), None)
+        refiner.predictor.predict.return_value = (
+            np.zeros((0, H, W), dtype=np.float32),
+            np.array([], dtype=np.float32),
+            None,
+        )
         # Must not raise IndexError
         result = refiner.refine_point(point=(25, 25))
         self.assertIsNone(result)
