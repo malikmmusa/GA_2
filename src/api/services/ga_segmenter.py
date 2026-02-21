@@ -451,6 +451,19 @@ class GASegmenterService:
             click_y_local = click_y
             disc_center_x_local = disc_center_x
         
+        # SAM point-prompt fast path
+        if self.use_sam and self._sam is not None and self._sam.available:
+            en_face_rgb = cv2.cvtColor(en_face, cv2.COLOR_BGR2RGB) if len(en_face.shape) == 3 else en_face
+            self._sam.set_image(en_face_rgb)
+            result = self._sam.refine_point(point=(int(click_x_local), int(click_y_local)))
+            if result is not None:
+                contour = result["contour"]
+                if en_face_split_x is not None:
+                    adjusted = contour.copy()
+                    adjusted[:, 0, 0] += en_face_split_x
+                    return [adjusted]
+                return [contour]
+
         # Convert to grayscale
         if len(en_face.shape) == 3:
             gray = cv2.cvtColor(en_face, cv2.COLOR_BGR2GRAY)
