@@ -34,6 +34,9 @@ raw_marked/
 src/debug_*.py
 src/eval_*.py
 
+# Git worktrees
+.worktrees/
+
 # Output/Tmp
 tmp/
 temp/
