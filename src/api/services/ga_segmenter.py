@@ -9,6 +9,8 @@ import os
 # Import legacy utilities
 sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 
+from src.api.services.sam_refiner import SAMRefiner
+
 
 class GASegmenterService:
     """
@@ -31,7 +33,8 @@ class GASegmenterService:
         max_regions: Optional[int] = None,
         disc_exclusion_multiplier: float = 0.6,
         clahe_clip_limit: float = 3.0,
-        morph_kernel_size: int = 11
+        morph_kernel_size: int = 11,
+        use_sam: bool = True,
     ):
         """
         Initialize GA segmentation service.
@@ -45,6 +48,7 @@ class GASegmenterService:
             disc_exclusion_multiplier: Disc masking radius multiplier (default: 0.6)
             clahe_clip_limit: CLAHE clip limit (default: 3.0)
             morph_kernel_size: Morphological operations kernel size (default: 11)
+            use_sam: Whether to refine K-means contours with SAM2 (default: True)
         """
         self.n_clusters = n_clusters
         self.min_area = min_area
@@ -54,6 +58,8 @@ class GASegmenterService:
         self.disc_exclusion_multiplier = disc_exclusion_multiplier
         self.clahe_clip_limit = clahe_clip_limit
         self.morph_kernel_size = morph_kernel_size
+        self.use_sam = use_sam
+        self._sam = SAMRefiner() if use_sam else None
     
     def _apply_clahe(self, gray: np.ndarray) -> np.ndarray:
         """
@@ -321,7 +327,18 @@ class GASegmenterService:
         
         if not contours:
             return []
-        
+
+        if self.use_sam and self._sam is not None and self._sam.available:
+            boxes = []
+            for cnt in contours:
+                x, y, w_box, h_box = cv2.boundingRect(cnt)
+                boxes.append(np.array([x, y, x + w_box, y + h_box]))
+            en_face_rgb = cv2.cvtColor(en_face, cv2.COLOR_BGR2RGB) if len(en_face.shape) == 3 else en_face
+            self._sam.set_image(en_face_rgb)
+            sam_results = self._sam.refine_candidates(boxes)
+            if sam_results:
+                contours = [r["contour"] for r in sam_results]
+
         # Filter and score contours
         candidates = []
         
@@ -434,6 +451,19 @@ class GASegmenterService:
             click_y_local = click_y
             disc_center_x_local = disc_center_x
         
+        # SAM point-prompt fast path
+        if self.use_sam and self._sam is not None and self._sam.available:
+            en_face_rgb = cv2.cvtColor(en_face, cv2.COLOR_BGR2RGB) if len(en_face.shape) == 3 else en_face
+            self._sam.set_image(en_face_rgb)
+            result = self._sam.refine_point(point=(int(click_x_local), int(click_y_local)))
+            if result is not None:
+                contour = result["contour"]
+                if en_face_split_x is not None:
+                    adjusted = contour.copy()
+                    adjusted[:, 0, 0] += en_face_split_x
+                    return [adjusted]
+                return [contour]
+
         # Convert to grayscale
         if len(en_face.shape) == 3:
             gray = cv2.cvtColor(en_face, cv2.COLOR_BGR2GRAY)

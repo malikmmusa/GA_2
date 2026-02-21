@@ -19,6 +19,7 @@ env/
 *.pth
 *.pt
 *.ckpt
+weights/
 
 # Debug output
 debug_output/
