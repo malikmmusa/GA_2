@@ -17,7 +17,7 @@ def get_ga_segmenter() -> GASegmenterService:
     """Get or initialize the GA segmenter service (singleton)."""
     global ga_segmenter
     if ga_segmenter is None:
-        ga_segmenter = GASegmenterService()
+        ga_segmenter = GASegmenterService(use_sam=True)
     return ga_segmenter
 
 @router.post("/segment-ga", response_model=GASegmentationResponse)
