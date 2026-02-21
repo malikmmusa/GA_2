@@ -132,6 +132,15 @@ class TestSAMRefinerCandidates(unittest.TestCase):
         self.assertEqual(contour.shape[1], 1)
         self.assertEqual(contour.shape[2], 2)
 
+    def test_refine_candidates_handles_empty_predictor_output(self):
+        """If predictor returns empty masks/scores, result is silently skipped."""
+        refiner = _make_available_refiner()
+        refiner.predictor.predict.return_value = (np.zeros((0, 1, H, W), dtype=bool), torch.tensor([[]]), None)
+        boxes = [np.array([5, 5, 45, 45])]
+        # Must not raise IndexError
+        result = refiner.refine_candidates(boxes)
+        self.assertEqual(result, [])
+
 
 # ---------------------------------------------------------------------------
 # Group 4 — refine_point (point prompt)
@@ -153,6 +162,14 @@ class TestSAMRefinerPoint(unittest.TestCase):
         self.assertIn("mask", result)
         self.assertIn("iou", result)
         self.assertIn("contour", result)
+
+    def test_refine_point_handles_empty_predictor_output(self):
+        """If predictor returns empty masks/scores, returns None."""
+        refiner = _make_available_refiner()
+        refiner.predictor.predict.return_value = (np.zeros((0, 1, H, W), dtype=bool), torch.tensor([[]]), None)
+        # Must not raise IndexError
+        result = refiner.refine_point(point=(25, 25))
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

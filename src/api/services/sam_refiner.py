@@ -66,6 +66,8 @@ class SAMRefiner:
         results = []
         for box in boxes:
             masks, scores, _ = self.predictor.predict(box=box, multimask_output=False)
+            if len(masks) == 0:
+                continue
             iou = float(scores[0][0])
             if iou < min_iou:
                 continue
@@ -78,7 +80,7 @@ class SAMRefiner:
     def refine_point(
         self,
         point: Tuple[int, int],
-        labels: List[int] = None,
+        labels: Optional[List[int]] = None,
     ) -> Optional[dict]:
         if not self.available:
             return None
@@ -91,6 +93,8 @@ class SAMRefiner:
             point_labels=np.array(labels),
             multimask_output=False,
         )
+        if len(masks) == 0:
+            return None
         iou = float(scores[0][0])
         mask_2d = masks[0].squeeze()
         return {"mask": mask_2d, "iou": iou, "contour": _extract_contour(mask_2d)}
