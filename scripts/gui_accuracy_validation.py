@@ -21,7 +21,6 @@ from __future__ import annotations
 import argparse
 import csv
 import os
-import signal
 import subprocess
 import sys
 import time
@@ -32,7 +31,7 @@ from typing import Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 import requests
-from playwright.sync_api import Browser, Locator, Page, TimeoutError as PlaywrightTimeoutError, sync_playwright
+from playwright.sync_api import Browser, Locator, Page, sync_playwright
 
 # Allow importing split utilities from src/
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -126,34 +125,72 @@ def _largest_component_mask(binary_mask: np.ndarray, min_area: int = 20) -> Opti
     return (labels == best_idx).astype(np.uint8) * 255
 
 
-def detect_peach_line_endpoints(raw_bgr: np.ndarray, diff_mask: np.ndarray) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-    hsv = cv2.cvtColor(raw_bgr, cv2.COLOR_BGR2HSV)
-    # Peach/yellow annotation around #F4C5AD with broad tolerance
-    lower = np.array([5, 20, 100], dtype=np.uint8)
-    upper = np.array([35, 255, 255], dtype=np.uint8)
-    peach = cv2.inRange(hsv, lower, upper)
-    peach = cv2.bitwise_and(peach, diff_mask)
-    peach = cv2.morphologyEx(peach, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-
-    comp = _largest_component_mask(peach, min_area=30)
-    if comp is None:
-        return None
-
-    ys, xs = np.where(comp > 0)
+def _mask_endpoints(component_mask: np.ndarray) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    ys, xs = np.where(component_mask > 0)
     if len(xs) < 2:
         return None
 
     pts = np.column_stack([xs, ys]).astype(np.float32)
     center = np.mean(pts, axis=0)
     centered = pts - center
-
-    # Principal axis endpoints via SVD projection
     _, _, vt = np.linalg.svd(centered, full_matrices=False)
     axis = vt[0]
     proj = centered @ axis
     p1 = pts[int(np.argmin(proj))]
     p2 = pts[int(np.argmax(proj))]
     return p1, p2
+
+
+def detect_peach_line_endpoints(
+    raw_bgr: np.ndarray,
+    diff_mask: np.ndarray,
+    split_x: int,
+) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """
+    Detect the annotated yellow/peach GA ruler line in raw_marked.
+    This intentionally excludes red disc/fovea annotations.
+    """
+    b = raw_bgr[:, :, 0]
+    g = raw_bgr[:, :, 1]
+    r = raw_bgr[:, :, 2]
+
+    # GA ruler is bright yellow in these annotations.
+    # We intentionally reject peach-like disc markings by requiring low blue.
+    yellow_like = (
+        (r >= 180)
+        & (g >= 160)
+        & (b <= 150)
+        & (np.abs(r.astype(np.int16) - g.astype(np.int16)) <= 80)
+    )
+
+    x_coords = np.tile(np.arange(raw_bgr.shape[1]), (raw_bgr.shape[0], 1))
+    enface_side = x_coords >= split_x
+    line_mask = (yellow_like & (diff_mask > 0) & enface_side).astype(np.uint8) * 255
+    line_mask = cv2.morphologyEx(line_mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    line_mask = cv2.morphologyEx(line_mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(line_mask, connectivity=8)
+    best_idx = -1
+    best_score = -1.0
+    for idx in range(1, num_labels):
+        area = float(stats[idx, cv2.CC_STAT_AREA])
+        width = float(stats[idx, cv2.CC_STAT_WIDTH])
+        height = float(stats[idx, cv2.CC_STAT_HEIGHT])
+        if area < 25:
+            continue
+        long_side = max(width, height)
+        short_side = max(1.0, min(width, height))
+        elongation = long_side / short_side
+        score = area + (long_side * 8.0) + (elongation * 20.0)
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+
+    if best_idx < 0:
+        return None
+
+    component_mask = (labels == best_idx).astype(np.uint8) * 255
+    return _mask_endpoints(component_mask)
 
 
 def detect_disc_from_red(raw_bgr: np.ndarray, diff_mask: np.ndarray) -> Optional[Tuple[float, float, float]]:
@@ -196,48 +233,44 @@ def detect_disc_from_red(raw_bgr: np.ndarray, diff_mask: np.ndarray) -> Optional
 def detect_fovea_marker(
     raw_bgr: np.ndarray,
     diff_mask: np.ndarray,
-    disc: Optional[Tuple[float, float, float]],
-    line_endpoints: Optional[Tuple[np.ndarray, np.ndarray]],
+    line_endpoints: Tuple[np.ndarray, np.ndarray],
     split_x: int,
 ) -> Optional[Tuple[float, float]]:
     hsv = cv2.cvtColor(raw_bgr, cv2.COLOR_BGR2HSV)
+    def collect_candidates(mask: np.ndarray, area_max: int) -> List[Tuple[float, float]]:
+        out: List[Tuple[float, float]] = []
+        num_labels, _, stats, centroids = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        for idx in range(1, num_labels):
+            area = int(stats[idx, cv2.CC_STAT_AREA])
+            w = int(stats[idx, cv2.CC_STAT_WIDTH])
+            h = int(stats[idx, cv2.CC_STAT_HEIGHT])
+            if area < 8 or area > area_max:
+                continue
+            if max(w, h) / max(1, min(w, h)) > 6.0:
+                continue
+
+            cx, cy = float(centroids[idx][0]), float(centroids[idx][1])
+            if cx < split_x:
+                continue
+            out.append((cx, cy))
+        return out
+
     red1 = cv2.inRange(hsv, np.array([0, 70, 70], dtype=np.uint8), np.array([10, 255, 255], dtype=np.uint8))
     red2 = cv2.inRange(hsv, np.array([170, 70, 70], dtype=np.uint8), np.array([180, 255, 255], dtype=np.uint8))
     red = cv2.bitwise_or(red1, red2)
-    green = cv2.inRange(hsv, np.array([35, 40, 40], dtype=np.uint8), np.array([90, 255, 255], dtype=np.uint8))
-    marker = cv2.bitwise_or(red, green)
-    marker = cv2.bitwise_and(marker, diff_mask)
-    marker = cv2.morphologyEx(marker, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    red = cv2.bitwise_and(red, diff_mask)
+    red = cv2.morphologyEx(red, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    candidates = collect_candidates(red, area_max=1200)
 
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(marker, connectivity=8)
-    candidates: List[Tuple[float, float]] = []
-    for idx in range(1, num_labels):
-        area = int(stats[idx, cv2.CC_STAT_AREA])
-        w = int(stats[idx, cv2.CC_STAT_WIDTH])
-        h = int(stats[idx, cv2.CC_STAT_HEIGHT])
-        if area < 15 or area > 2000:
-            continue
-        if max(w, h) / max(1, min(w, h)) > 3.0:
-            continue
-
-        cx, cy = float(centroids[idx][0]), float(centroids[idx][1])
-        # Fovea is expected on en-face side
-        if cx < split_x:
-            continue
-
-        # Exclude points on top of disc line
-        if disc is not None:
-            disc_x, disc_top, disc_bottom = disc
-            if abs(cx - disc_x) < 20 and (disc_top - 20) <= cy <= (disc_bottom + 20):
-                continue
-
-        candidates.append((cx, cy))
+    # Optional fallback: blue outline around red dot (when center fill is weak)
+    if not candidates:
+        blue = cv2.inRange(hsv, np.array([90, 60, 60], dtype=np.uint8), np.array([145, 255, 255], dtype=np.uint8))
+        blue = cv2.bitwise_and(blue, diff_mask)
+        blue = cv2.morphologyEx(blue, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+        candidates = collect_candidates(blue, area_max=1600)
 
     if not candidates:
         return None
-
-    if line_endpoints is None:
-        return candidates[0]
 
     p1, p2 = line_endpoints
 
@@ -263,24 +296,24 @@ def extract_landmarks(input_path: Path, raw_path: Optional[Path]) -> Tuple[int, 
         return split_x, None, None
 
     diff = cv2.absdiff(marked, image)
-    diff_mask = (np.max(diff, axis=2) > 15).astype(np.uint8) * 255
+    # Keep only strong annotation deltas (prevents drift from subtle compression differences)
+    diff_mask = (np.max(diff, axis=2) > 35).astype(np.uint8) * 255
 
-    line_endpoints = detect_peach_line_endpoints(marked, diff_mask)
-    disc = detect_disc_from_red(marked, diff_mask)
-    fovea = detect_fovea_marker(marked, diff_mask, disc, line_endpoints, split_x)
+    line_endpoints = detect_peach_line_endpoints(marked, diff_mask, split_x)
+    if line_endpoints is None:
+        return split_x, None, None
+
+    fovea = detect_fovea_marker(marked, diff_mask, line_endpoints, split_x)
+    if fovea is None:
+        return split_x, None, None
 
     ga_target: Optional[Tuple[float, float]] = None
-    if line_endpoints is not None and fovea is not None:
-        p1, p2 = line_endpoints
-        f = np.array(fovea, dtype=np.float32)
-        d1 = float(np.linalg.norm(p1 - f))
-        d2 = float(np.linalg.norm(p2 - f))
-        far = p1 if d1 > d2 else p2
-        ga_target = (float(far[0]), float(far[1]))
-    elif line_endpoints is not None:
-        p1, p2 = line_endpoints
-        far = p1 if p1[0] > p2[0] else p2
-        ga_target = (float(far[0]), float(far[1]))
+    p1, p2 = line_endpoints
+    f = np.array(fovea, dtype=np.float32)
+    d1 = float(np.linalg.norm(p1 - f))
+    d2 = float(np.linalg.norm(p2 - f))
+    far = p1 if d1 > d2 else p2
+    ga_target = (float(far[0]), float(far[1]))
 
     return split_x, fovea, ga_target
 
@@ -467,20 +500,22 @@ def candidate_points(
 ) -> List[Tuple[float, float]]:
     offsets = [
         (0, 0),
-        (15, 0),
-        (-15, 0),
-        (0, 15),
-        (0, -15),
-        (25, 15),
-        (-25, 15),
-        (25, -15),
-        (-25, -15),
-        (40, 0),
-        (-40, 0),
-        (0, 30),
-        (0, -30),
-        (55, 20),
-        (-55, 20),
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1),
+        (6, 0),
+        (-6, 0),
+        (0, 6),
+        (0, -6),
+        (6, 6),
+        (-6, 6),
+        (6, -6),
+        (-6, -6),
+        (12, 0),
+        (-12, 0),
+        (0, 12),
+        (0, -12),
     ]
     out: List[Tuple[float, float]] = []
     for dx, dy in offsets:
@@ -496,27 +531,18 @@ def select_distance_for_panel(
     meta: ImageMeta,
     target_xy: Tuple[float, float],
     expected_distance_count: int,
-    manual_button_index: int,
-) -> None:
+    timeout_per_click_s: float = 3.5,
+) -> bool:
     # Automatic (region/local segmentation) attempts first.
     for point in candidate_points(target_xy, meta.split_x, meta.width, meta.height):
         click_image_point(canvas, point, meta.width, meta.height)
         try:
-            wait_for_distances(page, expected_count=expected_distance_count, timeout_s=3.0)
-            return
+            wait_for_distances(page, expected_count=expected_distance_count, timeout_s=timeout_per_click_s)
+            return True
         except TimeoutError:
             continue
 
-    # Fallback: manual point mode only if auto attempts fail.
-    manual_buttons = page.get_by_role("button", name="Select Manually")
-    count = manual_buttons.count()
-    if count == 0:
-        raise TimeoutError("Manual GA mode button unavailable after automatic attempts")
-
-    idx = manual_button_index if manual_button_index < count else count - 1
-    manual_buttons.nth(idx).click()
-    click_image_point(canvas, target_xy, meta.width, meta.height)
-    wait_for_distances(page, expected_count=expected_distance_count, timeout_s=8.0)
+    return False
 
 
 def process_case(page: Page, case: Case, meta: Dict[str, ImageMeta], output_dir: Path) -> List[Dict[str, str]]:
@@ -526,6 +552,12 @@ def process_case(page: Page, case: Case, meta: Dict[str, ImageMeta], output_dir:
     after_filename_for_gui = case.after_filename or case.before_filename
     after = meta[after_filename_for_gui]
     is_single = case.after_filename is None
+    before_eligible = before.raw_path is not None and before.fovea_xy is not None and before.ga_target_xy is not None
+    after_eligible = after.raw_path is not None and after.fovea_xy is not None and after.ga_target_xy is not None
+
+    if not before_eligible and not after_eligible:
+        print(f"  SKIP case {case.key}: no yellow-line GA target extracted")
+        return rows
 
     page.goto("http://127.0.0.1:3000", wait_until="domcontentloaded")
 
@@ -544,9 +576,9 @@ def process_case(page: Page, case: Case, meta: Dict[str, ImageMeta], output_dir:
     after_canvas = canvases.nth(1)
 
     # Align fovea with raw_marked target when available.
-    if before.fovea_xy is not None:
+    if before_eligible and before.fovea_xy is not None:
         click_image_point(before_canvas, before.fovea_xy, before.width, before.height)
-    if after.fovea_xy is not None:
+    if after_eligible and after.fovea_xy is not None:
         click_image_point(after_canvas, after.fovea_xy, after.width, after.height)
 
     wait_for_button(page, "Confirm Fovea on Both Images & Continue").click()
@@ -554,47 +586,53 @@ def process_case(page: Page, case: Case, meta: Dict[str, ImageMeta], output_dir:
     # Wait for GA mode.
     page.get_by_role("button", name="Select Manually").first.wait_for(state="visible", timeout=120000)
 
-    # Click GA target: endpoint furthest from fovea (from raw_marked yellow line).
-    before_ga = before.ga_target_xy or before.fovea_xy or (before.width * 0.75, before.height * 0.5)
-    after_ga = after.ga_target_xy or after.fovea_xy or (after.width * 0.75, after.height * 0.5)
+    before_selected = False
+    after_selected = False
+    expected_count = 0
 
-    select_distance_for_panel(
-        page=page,
-        canvas=before_canvas,
-        meta=before,
-        target_xy=before_ga,
-        expected_distance_count=1,
-        manual_button_index=0,
-    )
-    select_distance_for_panel(
-        page=page,
-        canvas=after_canvas,
-        meta=after,
-        target_xy=after_ga,
-        expected_distance_count=2,
-        manual_button_index=1,
-    )
+    if before_eligible and before.ga_target_xy is not None:
+        expected_count += 1
+        before_selected = select_distance_for_panel(
+            page=page,
+            canvas=before_canvas,
+            meta=before,
+            target_xy=before.ga_target_xy,
+            expected_distance_count=expected_count,
+        )
+        if not before_selected:
+            expected_count -= 1
+            print(f"  SKIP image {before.filename}: GA auto-selection failed at yellow endpoint")
 
-    confirm_ga_btn = page.get_by_role("button", name="Confirm GA Regions on Both Images")
-    if confirm_ga_btn.count() > 0 and confirm_ga_btn.first.is_visible():
-        confirm_ga_btn.first.click()
+    if after_eligible and after.ga_target_xy is not None:
+        expected_count += 1
+        after_selected = select_distance_for_panel(
+            page=page,
+            canvas=after_canvas,
+            meta=after,
+            target_xy=after.ga_target_xy,
+            expected_distance_count=expected_count,
+        )
+        if not after_selected:
+            expected_count -= 1
+            print(f"  SKIP image {after.filename}: GA auto-selection failed at yellow endpoint")
 
     before_canvas_img = decode_png_bytes(before_canvas.screenshot())
     after_canvas_img = decode_png_bytes(after_canvas.screenshot())
 
-    before_out = output_dir / f"{Path(before.filename).stem}_enface_comparison.png"
-    export_side_by_side(before_canvas_img, before, before_out)
-    rows.append(
-        {
-            "case_key": case.key,
-            "image_filename": before.filename,
-            "pair_mode": "single" if is_single else "paired_before",
-            "raw_marked_exists": "yes" if before.raw_path else "no",
-            "output_file": str(before_out.relative_to(PROJECT_ROOT)),
-        }
-    )
+    if before_selected:
+        before_out = output_dir / f"{Path(before.filename).stem}_enface_comparison.png"
+        export_side_by_side(before_canvas_img, before, before_out)
+        rows.append(
+            {
+                "case_key": case.key,
+                "image_filename": before.filename,
+                "pair_mode": "single" if is_single else "paired_before",
+                "raw_marked_exists": "yes" if before.raw_path else "no",
+                "output_file": str(before_out.relative_to(PROJECT_ROOT)),
+            }
+        )
 
-    if not is_single and case.after_filename is not None:
+    if (not is_single) and case.after_filename is not None and after_selected:
         after_out = output_dir / f"{Path(case.after_filename).stem}_enface_comparison.png"
         export_side_by_side(after_canvas_img, meta[case.after_filename], after_out)
         rows.append(
