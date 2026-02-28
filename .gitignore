@@ -29,7 +29,7 @@ input_images_marked/
 
 # Evaluation artifacts
 evaluation_*/
-raw_marked/
+# raw_marked/  — tracked for cloud agents
 
 # Debug/eval scripts
 src/debug_*.py
