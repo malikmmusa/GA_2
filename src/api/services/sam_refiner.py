@@ -6,8 +6,12 @@ import cv2
 import numpy as np
 import torch  # required for device detection (mps/cuda) and SAM2 internals
 
-from sam2.build_sam import build_sam2
-from sam2.sam2_image_predictor import SAM2ImagePredictor
+try:
+    from sam2.build_sam import build_sam2
+    from sam2.sam2_image_predictor import SAM2ImagePredictor
+except Exception:  # pragma: no cover - optional dependency
+    build_sam2 = None
+    SAM2ImagePredictor = None
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +41,10 @@ class SAMRefiner:
     ):
         self.available = False
         self.predictor = None
+
+        if build_sam2 is None or SAM2ImagePredictor is None:
+            logger.warning("SAM2 Python package is not installed — SAMRefiner unavailable")
+            return
 
         if not os.path.exists(checkpoint_path):
             logger.warning("SAM2 checkpoint not found at %s — SAMRefiner unavailable", checkpoint_path)

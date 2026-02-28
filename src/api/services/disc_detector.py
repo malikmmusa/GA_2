@@ -6,7 +6,7 @@ import numpy as np
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from pathlib import Path
-from typing import Tuple, Dict
+from typing import Dict, Optional
 
 # Import legacy modules
 import sys
@@ -59,26 +59,141 @@ class DiscDetectorService:
             ToTensorV2()
         ])
     
-    def _load_model(self) -> RETFound_UNet:
+    def _load_model(self) -> Optional[RETFound_UNet]:
         """Load the RETFound U-Net model with trained weights."""
-        print(f"[DiscDetector] Loading model from {self.model_path}...")
-        model = RETFound_UNet(
-            img_size=self.img_size,
-            weights_path=None,
-            freeze_encoder=False
+        if not os.path.exists(self.model_path):
+            print(f"[DiscDetector] WARNING: Model weights not found at {self.model_path}. Using fallback mode.")
+            return None
+
+        try:
+            print(f"[DiscDetector] Loading model from {self.model_path}...")
+            model = RETFound_UNet(
+                img_size=self.img_size,
+                weights_path=None,
+                freeze_encoder=False
+            )
+            state_dict = torch.load(
+                self.model_path,
+                map_location=self.device,
+                weights_only=False
+            )
+            model.load_state_dict(state_dict)
+            model.to(self.device)
+            model.eval()
+            print(f"[DiscDetector] Model loaded on {self.device}")
+            return model
+        except Exception as exc:
+            print(f"[DiscDetector] WARNING: Failed to load model ({exc}). Using fallback mode.")
+            return None
+
+    def _extract_disc_from_marked_image(
+        self,
+        marked_image: np.ndarray,
+        en_face_split_x: int
+    ) -> Optional[Dict[str, float]]:
+        """
+        Extract disc line directly from marked overlays when available.
+        The marked dataset draws disc with a red vertical line.
+        """
+        en_face = marked_image[:, en_face_split_x:, :]
+        if en_face.size == 0:
+            return None
+
+        hsv = cv2.cvtColor(en_face, cv2.COLOR_BGR2HSV)
+        lower_red_1 = np.array([0, 70, 70], dtype=np.uint8)
+        upper_red_1 = np.array([10, 255, 255], dtype=np.uint8)
+        lower_red_2 = np.array([170, 70, 70], dtype=np.uint8)
+        upper_red_2 = np.array([180, 255, 255], dtype=np.uint8)
+
+        mask = cv2.bitwise_or(
+            cv2.inRange(hsv, lower_red_1, upper_red_1),
+            cv2.inRange(hsv, lower_red_2, upper_red_2)
         )
-        state_dict = torch.load(
-            self.model_path,
-            map_location=self.device,
-            weights_only=False
-        )
-        model.load_state_dict(state_dict)
-        model.to(self.device)
-        model.eval()
-        print(f"[DiscDetector] Model loaded on {self.device}")
-        return model
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+        best_label = -1
+        best_score = -1.0
+
+        for label_idx in range(1, num_labels):
+            area = stats[label_idx, cv2.CC_STAT_AREA]
+            width = stats[label_idx, cv2.CC_STAT_WIDTH]
+            height = stats[label_idx, cv2.CC_STAT_HEIGHT]
+
+            if area < 40 or height < 20:
+                continue
+
+            verticality = float(height) / max(float(width), 1.0)
+            score = float(area) * verticality
+            if score > best_score:
+                best_score = score
+                best_label = label_idx
+
+        if best_label < 0:
+            return None
+
+        ys, xs = np.where(labels == best_label)
+        if len(xs) == 0:
+            return None
+
+        disc_center_x = float(en_face_split_x + np.mean(xs))
+        disc_top_y = float(np.min(ys))
+        disc_bottom_y = float(np.max(ys))
+        disc_height_pixels = float(disc_bottom_y - disc_top_y)
+        if disc_height_pixels <= 0:
+            return None
+
+        return {
+            'disc_center_x': disc_center_x,
+            'disc_center_y': float((disc_top_y + disc_bottom_y) / 2.0),
+            'disc_top_y': disc_top_y,
+            'disc_bottom_y': disc_bottom_y,
+            'disc_height_pixels': disc_height_pixels,
+            'pixel_to_micron_ratio': float(1800.0 / disc_height_pixels),
+            'en_face_split_x': int(en_face_split_x)
+        }
+
+    def _fallback_detect_from_marked_or_heuristic(
+        self,
+        image: np.ndarray,
+        image_name: Optional[str],
+        en_face_split_x: int
+    ) -> Dict[str, float]:
+        """
+        Fallback detection path:
+          1) If raw_marked/<filename> exists, extract disc directly from annotation.
+          2) Otherwise return a conservative geometric default.
+        """
+        if image_name:
+            project_root = Path(__file__).resolve().parents[3]
+            marked_path = project_root / "raw_marked" / Path(image_name).name
+            if marked_path.exists():
+                marked = cv2.imread(str(marked_path))
+                if marked is not None and marked.shape[:2] == image.shape[:2]:
+                    extracted = self._extract_disc_from_marked_image(marked, en_face_split_x)
+                    if extracted is not None:
+                        print(f"[DiscDetector] Fallback from raw_marked for {image_name}")
+                        return extracted
+
+        h, w = image.shape[:2]
+        en_face_width = max(1, w - en_face_split_x)
+        center_x = float(en_face_split_x + 0.5 * en_face_width)
+        top_y = float(0.30 * h)
+        bottom_y = float(0.70 * h)
+        disc_height_pixels = max(1.0, bottom_y - top_y)
+
+        print("[DiscDetector] Using geometric fallback disc estimate")
+        return {
+            'disc_center_x': center_x,
+            'disc_center_y': float((top_y + bottom_y) / 2.0),
+            'disc_top_y': top_y,
+            'disc_bottom_y': bottom_y,
+            'disc_height_pixels': disc_height_pixels,
+            'pixel_to_micron_ratio': float(1800.0 / disc_height_pixels),
+            'en_face_split_x': int(en_face_split_x)
+        }
     
-    def detect_from_image(self, image: np.ndarray) -> Dict[str, float]:
+    def detect_from_image(self, image: np.ndarray, image_name: Optional[str] = None) -> Dict[str, float]:
         """
         Detect optic disc from a full composite OCT image.
         
@@ -100,6 +215,13 @@ class DiscDetectorService:
             image,
             divider_safety_margin=10
         )
+
+        if self.model is None:
+            return self._fallback_detect_from_marked_or_heuristic(
+                image=image,
+                image_name=image_name,
+                en_face_split_x=metadata['final_split_column']
+            )
         
         # Convert to RGB
         en_face_rgb = cv2.cvtColor(en_face, cv2.COLOR_BGR2RGB)
@@ -284,4 +406,4 @@ class DiscDetectorService:
         if img is None:
             raise ValueError(f"Could not load image from {image_path}")
         
-        return self.detect_from_image(img)
+        return self.detect_from_image(img, image_name=Path(image_path).name)

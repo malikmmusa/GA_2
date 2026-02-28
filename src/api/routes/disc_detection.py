@@ -56,7 +56,7 @@ async def detect_optic_disc(file: UploadFile = File(...)) -> Dict:
         detector = get_disc_detector()
         
         # Perform detection
-        result = detector.detect_from_image(image)
+        result = detector.detect_from_image(image, image_name=file.filename)
         
         return result
     
