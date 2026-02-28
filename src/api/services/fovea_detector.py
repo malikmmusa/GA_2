@@ -1,16 +1,13 @@
 """Fovea Detection Service - Refactored from image_utils.py"""
-import cv2
-import numpy as np
-from typing import Tuple, Optional, Dict
-import sys
-import os
+from typing import Any, Dict
 
-# Import legacy utilities
-sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
-from utils.image_utils import (
-    find_fovea_anatomy_aware,
-    manual_fovea_adjustment
-)
+import numpy as np
+
+from src.utils.image_utils import find_fovea_anatomy_aware, manual_fovea_adjustment
+
+from ..utils.logger import get_logger
+
+logger = get_logger("services.fovea_detector")
 
 
 class FoveaDetectorService:
@@ -22,10 +19,6 @@ class FoveaDetectorService:
     3. Manual Adjustment (Interactive)
     """
     
-    def __init__(self):
-        """Initialize the fovea detector service."""
-        pass
-    
     def detect_fovea(
         self,
         image: np.ndarray,
@@ -35,7 +28,7 @@ class FoveaDetectorService:
         en_face_split_x: int,
         use_manual_adjustment: bool = False,
         image_name: str = "Image"
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """
         Detect fovea location using anatomy-aware logic.
         
@@ -80,7 +73,7 @@ class FoveaDetectorService:
         
         if anatomy_result:
             initial_guess, method_name = anatomy_result
-            print(f"  [FoveaDetector] {method_name} found at {initial_guess}")
+            logger.debug("%s found at %s", method_name, initial_guess)
             
             # Map method name to simpler labels
             if "Green Line" in method_name:
@@ -91,7 +84,7 @@ class FoveaDetectorService:
                 detection_method = "anatomy_aware"
         else:
             # Absolute fallback (rare)
-            print(f"  [FoveaDetector] Using raw geometry fallback")
+            logger.warning("Using raw geometry fallback")
             initial_guess = (int(est_x), int(est_y))
             detection_method = "raw_geometry"
         
@@ -145,16 +138,18 @@ class FoveaDetectorService:
             return False
         
         # Check distance from disc (should be 2-3 disc diameters away)
-        distance = np.sqrt(
-            (fovea_x - disc_center_x)**2 + (fovea_y - disc_center_y)**2
-        )
+        distance = np.hypot(fovea_x - disc_center_x, fovea_y - disc_center_y)
         
         min_distance = 1.5 * disc_height_pixels
         max_distance = 4.0 * disc_height_pixels
         
         if not (min_distance <= distance <= max_distance):
-            print(f"  [FoveaDetector] Warning: Fovea distance from disc is {distance:.1f} pixels")
-            print(f"    Expected range: {min_distance:.1f} - {max_distance:.1f} pixels")
+            logger.warning(
+                "Fovea distance from disc is %.1f px (expected %.1f - %.1f px)",
+                distance,
+                min_distance,
+                max_distance,
+            )
             return False
         
         return True

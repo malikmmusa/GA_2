@@ -1,18 +1,20 @@
-"""Optic Disc Detection Service - Refactored from run_inference.py"""
 import os
-import cv2
-import torch
-import numpy as np
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
 from pathlib import Path
 from typing import Dict, Optional
 
-# Import legacy modules
-import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
-from models.retfound_unet import RETFound_UNet
-from utils.image_utils import get_split_indices_and_images
+import albumentations as A
+import cv2
+import numpy as np
+import torch
+from albumentations.pytorch import ToTensorV2
+
+from src.models.retfound_unet import RETFound_UNet
+from src.utils.image_utils import get_split_indices_and_images
+
+from ..constants import DISC_DIAMETER_MICRONS
+from ..utils.logger import get_logger
+
+logger = get_logger("services.disc_detector")
 
 
 class DiscDetectorService:
@@ -25,7 +27,7 @@ class DiscDetectorService:
         self,
         model_path: str = "weights/best_disc_model.pth",
         img_size: int = 224,
-        device: str = None
+        device: Optional[str] = None,
     ):
         """
         Initialize the disc detector service.
@@ -40,7 +42,7 @@ class DiscDetectorService:
         
         # Auto-detect device
         if device is None:
-            if torch.backends.mps.is_available():
+            if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
                 self.device = torch.device('mps')
             elif torch.cuda.is_available():
                 self.device = torch.device('cuda')
@@ -62,11 +64,11 @@ class DiscDetectorService:
     def _load_model(self) -> Optional[RETFound_UNet]:
         """Load the RETFound U-Net model with trained weights."""
         if not os.path.exists(self.model_path):
-            print(f"[DiscDetector] WARNING: Model weights not found at {self.model_path}. Using fallback mode.")
+            logger.warning("Model weights not found at %s. Using fallback mode.", self.model_path)
             return None
 
         try:
-            print(f"[DiscDetector] Loading model from {self.model_path}...")
+            logger.info("Loading model from %s...", self.model_path)
             model = RETFound_UNet(
                 img_size=self.img_size,
                 weights_path=None,
@@ -80,10 +82,10 @@ class DiscDetectorService:
             model.load_state_dict(state_dict)
             model.to(self.device)
             model.eval()
-            print(f"[DiscDetector] Model loaded on {self.device}")
+            logger.info("Model loaded on %s", self.device)
             return model
         except Exception as exc:
-            print(f"[DiscDetector] WARNING: Failed to load model ({exc}). Using fallback mode.")
+            logger.warning("Failed to load model (%s). Using fallback mode.", exc)
             return None
 
     def _extract_disc_from_marked_image(
@@ -149,7 +151,7 @@ class DiscDetectorService:
             'disc_top_y': disc_top_y,
             'disc_bottom_y': disc_bottom_y,
             'disc_height_pixels': disc_height_pixels,
-            'pixel_to_micron_ratio': float(1800.0 / disc_height_pixels),
+            'pixel_to_micron_ratio': float(DISC_DIAMETER_MICRONS / disc_height_pixels),
             'en_face_split_x': int(en_face_split_x)
         }
 
@@ -172,7 +174,7 @@ class DiscDetectorService:
                 if marked is not None and marked.shape[:2] == image.shape[:2]:
                     extracted = self._extract_disc_from_marked_image(marked, en_face_split_x)
                     if extracted is not None:
-                        print(f"[DiscDetector] Fallback from raw_marked for {image_name}")
+                        logger.debug("Fallback from raw_marked for %s", image_name)
                         return extracted
 
         h, w = image.shape[:2]
@@ -182,14 +184,14 @@ class DiscDetectorService:
         bottom_y = float(0.70 * h)
         disc_height_pixels = max(1.0, bottom_y - top_y)
 
-        print("[DiscDetector] Using geometric fallback disc estimate")
+        logger.debug("Using geometric fallback disc estimate")
         return {
             'disc_center_x': center_x,
             'disc_center_y': float((top_y + bottom_y) / 2.0),
             'disc_top_y': top_y,
             'disc_bottom_y': bottom_y,
             'disc_height_pixels': disc_height_pixels,
-            'pixel_to_micron_ratio': float(1800.0 / disc_height_pixels),
+            'pixel_to_micron_ratio': float(DISC_DIAMETER_MICRONS / disc_height_pixels),
             'en_face_split_x': int(en_face_split_x)
         }
     
@@ -286,9 +288,6 @@ class DiscDetectorService:
         # -------------------------------------------------------------------------
         
         hm_h, hm_w = heatmap.shape
-        raw_max = heatmap.max()
-        raw_min = heatmap.min()
-        
         # Method 1: 98th percentile threshold (much tighter - only keep brightest ~2% of pixels)
         # The 95th percentile was still too permissive, leading to over-segmentation
         threshold_percentile = 98.0
@@ -314,7 +313,7 @@ class DiscDetectorService:
                 min_y_raw = py_raw
                 max_y_raw = py_raw
                 cx_raw = px_raw
-                print("  [DiscDetector] WARNING: No components found, using argmax fallback")
+                logger.warning("No components found, using argmax fallback")
             else:
                 # Extract coordinates from fallback mask
                 y_indices, x_indices = np.where(binary_mask_fallback > 0)
@@ -325,7 +324,7 @@ class DiscDetectorService:
                 weights = heatmap[binary_mask_fallback > 0]
                 cx_raw = np.average(x_indices, weights=weights)
                 
-                print(f"  [DiscDetector] Using 90th percentile fallback: {len(y_indices)} pixels")
+                logger.debug("Using 90th percentile fallback: %s pixels", len(y_indices))
         else:
             # Find largest component (excluding background label 0)
             areas = stats[1:, cv2.CC_STAT_AREA]  # Skip background
@@ -348,8 +347,12 @@ class DiscDetectorService:
             # Debug logging
             num_pixels = len(y_indices)
             bbox_h = stats[largest_component_idx, cv2.CC_STAT_HEIGHT]
-            print(f"  [DiscDetector] Largest component: {num_pixels} pixels, "
-                  f"Y-extent={max_y_raw - min_y_raw} px (bbox was {bbox_h} px)")
+            logger.debug(
+                "Largest component: %s pixels, Y-extent=%s px (bbox was %s px)",
+                num_pixels,
+                max_y_raw - min_y_raw,
+                bbox_h,
+            )
         
         # 3. Project to En Face Dimensions with Sub-Pixel Correction
         # Add 0.5 to center the coordinate within the raw pixel grid
@@ -375,12 +378,16 @@ class DiscDetectorService:
         pred_y_orig = (orig_min_y + orig_max_y) / 2
         
         # Calculate disc height and pixel-to-micron ratio
-        disc_height_pixels = orig_max_y - orig_min_y
-        pixel_to_micron_ratio = 1800.0 / disc_height_pixels  # 1800 microns is standard disc diameter
+        disc_height_pixels = max(float(orig_max_y - orig_min_y), 1.0)
+        pixel_to_micron_ratio = DISC_DIAMETER_MICRONS / disc_height_pixels
         
-        print(f"[DiscDetector] Disc detected at ({pred_x_orig:.1f}, {pred_y_orig:.1f})")
-        print(f"[DiscDetector] Disc height: {disc_height_pixels:.1f} pixels = 1800 microns")
-        print(f"[DiscDetector] Pixel-to-micron ratio: {pixel_to_micron_ratio:.3f}")
+        logger.debug("Disc detected at (%.1f, %.1f)", pred_x_orig, pred_y_orig)
+        logger.debug(
+            "Disc height: %.1f pixels = %.0f microns",
+            disc_height_pixels,
+            DISC_DIAMETER_MICRONS,
+        )
+        logger.debug("Pixel-to-micron ratio: %.3f", pixel_to_micron_ratio)
         
         return {
             'disc_center_x': float(orig_cx),

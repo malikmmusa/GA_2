@@ -1,37 +1,23 @@
 """Distance and progression calculation endpoints."""
 from fastapi import APIRouter, HTTPException
-from typing import Dict
 
-from ..services.calculator import DistanceCalculatorService, ProgressionCalculatorService
+from ..dependencies import get_distance_calculator, get_progression_calculator
 from ..models.schemas import (
     DistanceCalculationRequest,
     DistanceCalculationResponse,
     ProgressionCalculationRequest,
     ProgressionCalculationResponse
 )
+from ..utils.errors import route_error_handler
+from ..utils.responses import build_distance_response, build_progression_response
 
 router = APIRouter()
 
-# Initialize services (singletons)
-distance_calculator = None
-progression_calculator = None
-
-def get_distance_calculator() -> DistanceCalculatorService:
-    """Get or initialize the distance calculator service (singleton)."""
-    global distance_calculator
-    if distance_calculator is None:
-        distance_calculator = DistanceCalculatorService()
-    return distance_calculator
-
-def get_progression_calculator() -> ProgressionCalculatorService:
-    """Get or initialize the progression calculator service (singleton)."""
-    global progression_calculator
-    if progression_calculator is None:
-        progression_calculator = ProgressionCalculatorService()
-    return progression_calculator
-
 @router.post("/calculate-distance", response_model=DistanceCalculationResponse)
-async def calculate_distance(request: DistanceCalculationRequest) -> Dict:
+@route_error_handler("Distance calculation")
+async def calculate_distance(
+    request: DistanceCalculationRequest
+) -> DistanceCalculationResponse:
     """
     Calculate the shortest distance from fovea to a selected GA region.
     
@@ -44,40 +30,35 @@ async def calculate_distance(request: DistanceCalculationRequest) -> Dict:
     Returns:
         DistanceCalculationResponse with distance in pixels and microns
     """
-    try:
-        calculator = get_distance_calculator()
-        
-        # Validate region index
-        if request.selected_ga_region_index < 0 or request.selected_ga_region_index >= len(request.ga_regions):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid region index: {request.selected_ga_region_index}"
-            )
-        
-        # Get selected region
-        selected_region = request.ga_regions[request.selected_ga_region_index]
-        
-        # Calculate distance
-        result = calculator.calculate_fovea_to_ga_distance(
-            fovea_x=request.fovea_x,
-            fovea_y=request.fovea_y,
-            ga_region=selected_region,
-            pixel_to_micron_ratio=request.pixel_to_micron_ratio
-        )
-        
-        return result
-    
-    except HTTPException:
-        raise
-    
-    except Exception as e:
+    calculator = get_distance_calculator()
+
+    if request.selected_ga_region_index >= len(request.ga_regions):
         raise HTTPException(
-            status_code=500,
-            detail=f"Distance calculation failed: {str(e)}"
+            status_code=400,
+            detail=f"Invalid region index: {request.selected_ga_region_index}"
         )
 
+    selected_region = request.ga_regions[request.selected_ga_region_index]
+    if not selected_region:
+        raise HTTPException(
+            status_code=400,
+            detail=f"GA region {request.selected_ga_region_index} is empty",
+        )
+
+    result = calculator.calculate_fovea_to_ga_distance(
+        fovea_x=request.fovea_x,
+        fovea_y=request.fovea_y,
+        ga_region=selected_region,
+        pixel_to_micron_ratio=request.pixel_to_micron_ratio
+    )
+
+    return build_distance_response(result)
+
 @router.post("/calculate-progression", response_model=ProgressionCalculationResponse)
-async def calculate_progression(request: ProgressionCalculationRequest) -> Dict:
+@route_error_handler("Progression calculation")
+async def calculate_progression(
+    request: ProgressionCalculationRequest
+) -> ProgressionCalculationResponse:
     """
     Calculate GA progression rate and predict foveal involvement date.
     
@@ -98,22 +79,15 @@ async def calculate_progression(request: ProgressionCalculationRequest) -> Dict:
     Returns:
         ProgressionCalculationResponse with rate and prediction
     """
-    try:
-        calculator = get_progression_calculator()
-        
-        result = calculator.calculate_progression(
-            date_before=request.date_before,
-            date_after=request.date_after,
-            distance_before_microns=request.distance_before_microns,
-            distance_after_microns=request.distance_after_microns,
-            eye_side_before=request.eye_side_before,
-            eye_side_after=request.eye_side_after
-        )
-        
-        return result
-    
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Progression calculation failed: {str(e)}"
-        )
+    calculator = get_progression_calculator()
+
+    result = calculator.calculate_progression(
+        date_before=request.date_before,
+        date_after=request.date_after,
+        distance_before_microns=request.distance_before_microns,
+        distance_after_microns=request.distance_after_microns,
+        eye_side_before=request.eye_side_before,
+        eye_side_after=request.eye_side_after
+    )
+
+    return build_progression_response(result)

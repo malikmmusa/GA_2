@@ -23,7 +23,13 @@ export interface FoveaDetectionRequest {
 export interface FoveaDetectionResponse {
   fovea_x: number;
   fovea_y: number;
-  detection_method: string;
+  detection_method:
+    | 'green_line'
+    | 'geometric_fallback'
+    | 'anatomy_aware'
+    | 'raw_geometry'
+    | 'manual'
+    | 'registered';
   eye_side: 'OD' | 'OS';
 }
 
@@ -71,7 +77,7 @@ export interface ImageRegistrationResponse {
   transformed_fovea_y: number;
   transformed_disc_center_x: number | null;
   transformed_disc_center_y: number | null;
-  transform_matrix: number[] | null; // 2x3 affine: [a, b, tx, c, d, ty]
+  transform_matrix: [number, number, number, number, number, number] | null;
   en_face_split_x_ref: number | null;
   en_face_split_x_new: number | null;
   confidence: number;

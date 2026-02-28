@@ -1,12 +1,7 @@
 """Unit tests for image registration service."""
-import pytest
-import numpy as np
 import cv2
-import sys
-import os
-
-# Add parent directory to path for imports
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+import numpy as np
+import pytest
 
 from src.api.services.image_registrar import ImageRegistrarService
 
@@ -14,12 +9,12 @@ from src.api.services.image_registrar import ImageRegistrarService
 class TestImageRegistrarService:
     """Test suite for ImageRegistrarService."""
     
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def service(self):
         """Create a registrar service instance for testing."""
         return ImageRegistrarService()
     
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def synthetic_image(self):
         """
         Create a synthetic test image with features.
@@ -264,8 +259,3 @@ class TestImageRegistrarService:
         confidence, status, message = service._compute_confidence(0, 0)
         assert status == "failed"
         assert confidence == 0.0
-
-
-if __name__ == "__main__":
-    # Run tests with pytest
-    pytest.main([__file__, "-v"])

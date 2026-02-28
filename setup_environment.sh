@@ -1,11 +1,19 @@
 #!/bin/bash
 # Setup script for Atrophy Advisor development environment
 
-set -e
+set -euo pipefail
 
 echo "=========================================="
 echo "Atrophy Advisor - Environment Setup"
 echo "=========================================="
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "❌ python3 is not installed or not on PATH."
+    exit 1
+fi
 
 # Check Python version
 PYTHON_VERSION=$(python3 --version)
@@ -23,15 +31,11 @@ source venv/bin/activate
 
 # Upgrade pip
 echo "Upgrading pip..."
-pip install --upgrade pip
-
-# Install PyTorch (with MPS support for Apple Silicon)
-echo "Installing PyTorch..."
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+python -m pip install --upgrade pip setuptools wheel
 
 # Install other requirements
 echo "Installing requirements..."
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 
 echo ""
 echo "=========================================="
@@ -42,5 +46,8 @@ echo "To activate the environment in the future, run:"
 echo "  source venv/bin/activate"
 echo ""
 echo "To start the API server:"
-echo "  cd src/api && python -m uvicorn main:app --reload"
+echo "  ./start_api.sh"
+echo ""
+echo "To start the frontend server:"
+echo "  ./start_frontend.sh"
 echo ""

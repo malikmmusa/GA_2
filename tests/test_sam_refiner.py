@@ -5,13 +5,9 @@ Mock shapes match real SAM2 predictor output:
   masks  → (num_masks, H, W)  float32
   scores → (num_masks,)       float32  1-D numpy array
 """
-import os
-import sys
 import numpy as np
 import unittest
 from unittest.mock import patch, MagicMock
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.api.services.sam_refiner import SAMRefiner  # noqa: E402  — fails until GREEN
 
@@ -179,5 +175,3 @@ class TestSAMRefinerPoint(unittest.TestCase):
         self.assertIsNone(result)
 
 
-if __name__ == "__main__":
-    unittest.main()

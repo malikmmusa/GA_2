@@ -24,7 +24,12 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
   }
 
   const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString('en-US', {
+    const parsed = new Date(dateStr);
+    if (Number.isNaN(parsed.getTime())) {
+      return dateStr;
+    }
+
+    return parsed.toLocaleDateString('en-US', {
       year: 'numeric',
       month: 'long',
       day: 'numeric',

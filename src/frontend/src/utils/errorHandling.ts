@@ -10,7 +10,22 @@ interface ValidationError {
   type: string;
   loc: Array<string | number>;
   msg: string;
-  input?: any;
+  input?: unknown;
+}
+
+interface FastAPIErrorPayload {
+  detail?: unknown;
+  message?: unknown;
+}
+
+interface ErrorWithResponse {
+  response?: {
+    data?: FastAPIErrorPayload;
+  };
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 /**
@@ -28,7 +43,7 @@ interface ValidationError {
  * @returns A safe string error message that can be rendered in React
  */
 export function extractErrorMessage(
-  error: any,
+  error: unknown,
   fallbackMessage: string = 'An unexpected error occurred'
 ): string {
   // Handle null/undefined
@@ -37,8 +52,9 @@ export function extractErrorMessage(
   }
 
   // Try axios error response structure first
-  if (error.response?.data) {
-    const data = error.response.data;
+  const responseData = (error as ErrorWithResponse)?.response?.data;
+  if (responseData && isObject(responseData)) {
+    const data = responseData;
 
     // Check if it's a FastAPI validation error (422)
     if (Array.isArray(data.detail)) {
@@ -60,12 +76,12 @@ export function extractErrorMessage(
     }
 
     // Check if detail is an object with msg field
-    if (data.detail && typeof data.detail === 'object' && 'msg' in data.detail) {
+    if (isObject(data.detail) && 'msg' in data.detail) {
       return String(data.detail.msg);
     }
 
     // Fallback: stringify the detail object
-    if (data.detail && typeof data.detail === 'object') {
+    if (isObject(data.detail)) {
       try {
         return `Error: ${JSON.stringify(data.detail)}`;
       } catch {
@@ -84,14 +100,13 @@ export function extractErrorMessage(
     return error.message;
   }
 
-  // Try error.message property
-  if (error.message && typeof error.message === 'string') {
-    return error.message;
-  }
-
-  // Try error.msg property (some APIs use this)
-  if (error.msg && typeof error.msg === 'string') {
-    return error.msg;
+  if (isObject(error)) {
+    if (typeof error.message === 'string') {
+      return error.message;
+    }
+    if (typeof error.msg === 'string') {
+      return error.msg;
+    }
   }
 
   // If error is a string itself
@@ -100,7 +115,7 @@ export function extractErrorMessage(
   }
 
   // Last resort: try to stringify
-  if (typeof error === 'object') {
+  if (isObject(error)) {
     try {
       return `Error: ${JSON.stringify(error)}`;
     } catch {
@@ -116,6 +131,6 @@ export function extractErrorMessage(
  * Type guard to ensure error is a string
  * Use this in components to satisfy TypeScript
  */
-export function ensureStringError(error: any): string {
+export function ensureStringError(error: unknown): string {
   return extractErrorMessage(error);
 }

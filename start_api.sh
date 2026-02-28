@@ -1,13 +1,16 @@
 #!/bin/bash
 # Start the Atrophy Advisor API server
 
+set -euo pipefail
+
 echo "=========================================="
 echo "Starting Atrophy Advisor API Server"
 echo "=========================================="
 echo ""
 
 # Change to project root
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
 # Check if virtual environment exists
 if [ -d "venv" ]; then
@@ -24,4 +27,5 @@ echo "Starting FastAPI server on http://localhost:8000"
 echo "API documentation: http://localhost:8000/docs"
 echo ""
 
-PYTHONPATH="$(pwd)" ./venv/bin/python -m uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000
+export PYTHONPATH="${SCRIPT_DIR}"
+exec ./venv/bin/python -m uvicorn src.api.main:app --reload --host 0.0.0.0 --port 8000

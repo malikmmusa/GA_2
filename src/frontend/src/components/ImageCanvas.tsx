@@ -5,6 +5,7 @@
  */
 import React, { useRef, useEffect, useState } from 'react';
 import type { ImageAnalysis } from '../types/api';
+import { getImageCoordinates } from '../utils/canvas';
 
 // Constants
 const FOVEA_RADIUS = 4; // Display radius in pixels for fovea marker
@@ -45,7 +46,7 @@ function isPointNearFovea(
   
   const dx = x - imageAnalysis.fovea.fovea_x;
   const dy = y - imageAnalysis.fovea.fovea_y;
-  const distance = Math.sqrt(dx * dx + dy * dy);
+  const distance = Math.hypot(dx, dy);
   
   return distance <= hitRadius;
 }
@@ -63,17 +64,13 @@ function getDiscHitZone(
   const { disc_center_x, disc_top_y, disc_bottom_y } = disc;
 
   // Check top handle
-  const distToTop = Math.sqrt(
-    Math.pow(x - disc_center_x, 2) + Math.pow(y - disc_top_y, 2)
-  );
+  const distToTop = Math.hypot(x - disc_center_x, y - disc_top_y);
   if (distToTop <= DISC_HIT_RADIUS) {
     return 'top';
   }
 
   // Check bottom handle
-  const distToBottom = Math.sqrt(
-    Math.pow(x - disc_center_x, 2) + Math.pow(y - disc_bottom_y, 2)
-  );
+  const distToBottom = Math.hypot(x - disc_center_x, y - disc_bottom_y);
   if (distToBottom <= DISC_HIT_RADIUS) {
     return 'bottom';
   }
@@ -98,7 +95,6 @@ function drawAnnotatedImage(
   image: HTMLImageElement,
   imageAnalysis: ImageAnalysis,
   scale: number,
-  _hoveredRegionIndex: number | null,
   foveaConfirmed: boolean,
   hoveredDiscZone: 'top' | 'bottom' | 'body' | null = null,
   registrationSuggestion?: { fovea_x: number; fovea_y: number },
@@ -165,8 +161,8 @@ function drawAnnotatedImage(
     }
   }
 
-  // Draw registration suggestion (yellow circle) if present and not confirmed
-  if (registrationSuggestion && !foveaConfirmed) {
+  // Draw registration suggestion (yellow circle) until user manually places fovea
+  if (registrationSuggestion && !foveaConfirmed && imageAnalysis.fovea?.detection_method !== 'manual') {
     ctx.fillStyle = 'rgba(255, 255, 0, 0.7)';
     ctx.beginPath();
     ctx.arc(
@@ -281,7 +277,6 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const modalCanvasRef = useRef<HTMLCanvasElement>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
-  const [hoveredRegionIndex, _setHoveredRegionIndex] = useState<number | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   
   // Fovea drag state
@@ -338,8 +333,17 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     canvas.height = image.height * newScale;
 
     // Use helper function to draw everything
-    drawAnnotatedImage(ctx, image, imageAnalysis, newScale, hoveredRegionIndex, foveaConfirmed, hoveredDiscZone, registrationSuggestion, manualGAMode);
-  }, [image, imageAnalysis, hoveredRegionIndex, foveaConfirmed, hoveredDiscZone, registrationSuggestion, manualGAMode]);
+    drawAnnotatedImage(
+      ctx,
+      image,
+      imageAnalysis,
+      newScale,
+      foveaConfirmed,
+      hoveredDiscZone,
+      registrationSuggestion,
+      manualGAMode
+    );
+  }, [image, imageAnalysis, foveaConfirmed, hoveredDiscZone, registrationSuggestion, manualGAMode]);
 
   // Draw modal canvas when modal is open
   useEffect(() => {
@@ -358,8 +362,24 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     canvas.height = image.height * modalScale;
 
     // Use helper function to draw everything
-    drawAnnotatedImage(ctx, image, imageAnalysis, modalScale, null, false, null, undefined, false);
-  }, [modalOpen, image, imageAnalysis, foveaConfirmed]);
+    drawAnnotatedImage(
+      ctx,
+      image,
+      imageAnalysis,
+      modalScale,
+      foveaConfirmed,
+      null,
+      registrationSuggestion,
+      manualGAMode
+    );
+  }, [
+    modalOpen,
+    image,
+    imageAnalysis,
+    foveaConfirmed,
+    registrationSuggestion,
+    manualGAMode,
+  ]);
 
   // Handle Escape key to close modal
   useEffect(() => {
@@ -380,13 +400,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     if (!canvasRef.current || !imageAnalysis || !image || foveaConfirmed) return;
 
     const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    
-    // Convert from screen pixels to original image pixels
-    const scaleX = image.width / rect.width;
-    const scaleY = image.height / rect.height;
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
+    const { x, y } = getImageCoordinates(e, canvas, image);
 
     // Priority: disc handles > fovea > disc body
     
@@ -441,6 +455,41 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     isDraggingDiscRef.current = false;
   };
 
+  // Handle clicks once fovea is confirmed (GA interaction mode)
+  const handleConfirmedFoveaInteraction = (x: number, y: number): boolean => {
+    if (!foveaConfirmed) return false;
+    const enFaceSplitX = imageAnalysis?.disc?.en_face_split_x;
+    const regions = imageAnalysis?.gaRegions?.regions;
+
+    // Restrict clicks to en-face region
+    if (enFaceSplitX !== undefined && x < enFaceSplitX) {
+      return true;
+    }
+
+    if (manualGAMode && onManualGAPointClick) {
+      onManualGAPointClick(x, y);
+      return true;
+    }
+
+    // Check if click is inside any existing region
+    if (regions && onGARegionClick) {
+      for (let i = 0; i < regions.length; i++) {
+        const region = regions[i];
+        if (region && isPointInPolygon(x, y, region)) {
+          onGARegionClick(i);
+          return true;
+        }
+      }
+    }
+
+    // Click outside all existing regions - trigger area click for localized segmentation
+    if (onGAAreaClick) {
+      onGAAreaClick(x, y);
+    }
+
+    return true;
+  };
+
   // Handle canvas click
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!canvasRef.current || !imageAnalysis || !image) return;
@@ -452,46 +501,10 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     if (isProcessingGA) return;
 
     const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    
-    // Convert from screen pixels to original image pixels
-    // Account for both canvas internal scaling AND CSS scaling
-    const scaleX = image.width / rect.width;
-    const scaleY = image.height / rect.height;
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
+    const { x, y } = getImageCoordinates(e, canvas, image);
 
     // GATING LOGIC: After fovea is confirmed, ONLY allow GA selection
-    if (foveaConfirmed) {
-      // Restrict clicks to en-face region
-      if (imageAnalysis.disc?.en_face_split_x !== undefined && x < imageAnalysis.disc.en_face_split_x) {
-        console.log('[GA] Click on B-scan side ignored');
-        return;
-      }
-
-      if (manualGAMode && onManualGAPointClick) {
-        onManualGAPointClick(x, y);
-        return;
-      }
-
-      // Check if click is inside any existing region
-      if (imageAnalysis.gaRegions?.regions && onGARegionClick) {
-        for (let i = 0; i < imageAnalysis.gaRegions.regions.length; i++) {
-          const region = imageAnalysis.gaRegions.regions[i];
-          if (region && isPointInPolygon(x, y, region)) {
-            console.log(`[GA] Click inside region ${i}`);
-            onGARegionClick(i);
-            return;
-          }
-        }
-      }
-
-      // Click outside all existing regions - trigger area click for localized segmentation
-      if (onGAAreaClick) {
-        console.log(`[GA] Click outside existing regions at (${x.toFixed(1)}, ${y.toFixed(1)})`);
-        onGAAreaClick(x, y);
-      }
-      
+    if (handleConfirmedFoveaInteraction(x, y)) {
       return;
     }
 
@@ -517,15 +530,10 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
   // Handle modal canvas mouse down
   const handleModalCanvasMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!modalCanvasRef.current || !imageAnalysis || !image) return;
+    if (!modalCanvasRef.current || !imageAnalysis || !image || foveaConfirmed) return;
 
     const canvas = modalCanvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    
-    const scaleX = image.width / rect.width;
-    const scaleY = image.height / rect.height;
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
+    const { x, y } = getImageCoordinates(e, canvas, image);
 
     // Priority: disc handles > fovea > disc body
     
@@ -584,17 +592,12 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     if (!modalCanvasRef.current || !imageAnalysis || !image) return;
 
     const canvas = modalCanvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    
-    const scaleX = image.width / rect.width;
-    const scaleY = image.height / rect.height;
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
+    const { x, y } = getImageCoordinates(e, canvas, image);
 
     // Handle dragging disc
     if (isDraggingModalDiscRef.current && imageAnalysis.disc && onDiscAdjust) {
       const disc = imageAnalysis.disc;
-      const enFaceSplitX = disc.en_face_split_x || 0;
+      const enFaceSplitX = disc.en_face_split_x ?? 0;
 
       if (modalDiscDragType === 'top') {
         // Drag top handle - clamp to stay above bottom
@@ -610,9 +613,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
         const centerY = y - modalDiscDragOffset.dy;
         
         const height = disc.disc_bottom_y - disc.disc_top_y;
-        let newCenterX = Math.max(enFaceSplitX, Math.min(image.width, centerX));
-        let newTopY = Math.max(0, Math.min(image.height - height, centerY - height / 2));
-        let newBottomY = newTopY + height;
+        const newCenterX = Math.max(enFaceSplitX, Math.min(image.width, centerX));
+        const newTopY = Math.max(0, Math.min(image.height - height, centerY - height / 2));
+        const newBottomY = newTopY + height;
         
         onDiscAdjust(newCenterX, newTopY, newBottomY);
       }
@@ -626,7 +629,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
         const modalScale = Math.min(scaleW, scaleH);
         
         // Calculate updated disc values
-        let newDisc = { ...disc };
+        const newDisc = { ...disc };
         if (modalDiscDragType === 'top') {
           newDisc.disc_top_y = Math.max(0, Math.min(y, disc.disc_bottom_y - MIN_DISC_HEIGHT));
         } else if (modalDiscDragType === 'bottom') {
@@ -645,7 +648,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
           disc: newDisc,
         };
         
-        drawAnnotatedImage(ctx, image, updatedAnalysis, modalScale, null, false, modalDiscDragType);
+        drawAnnotatedImage(ctx, image, updatedAnalysis, modalScale, false, modalDiscDragType);
       }
       return;
     }
@@ -671,13 +674,13 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
           } : undefined,
         };
         
-        drawAnnotatedImage(ctx, image, updatedAnalysis, modalScale, null, false, null);
+        drawAnnotatedImage(ctx, image, updatedAnalysis, modalScale, false, null);
       }
       return;
     }
 
     // Check if hovering over disc (for cursor feedback)
-    if (imageAnalysis.disc) {
+    if (!foveaConfirmed && imageAnalysis.disc) {
       const discZone = getDiscHitZone(x, y, imageAnalysis.disc);
       if (discZone !== hoveredModalDiscZone) {
         setHoveredModalDiscZone(discZone);
@@ -685,7 +688,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     }
 
     // Check if hovering over fovea
-    if (imageAnalysis.fovea) {
+    if (!foveaConfirmed && imageAnalysis.fovea) {
       const hovering = isPointNearFovea(x, y, imageAnalysis);
       if (hovering !== isHoveringModalFovea) {
         setIsHoveringModalFovea(hovering);
@@ -695,19 +698,23 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
 
   // Handle modal canvas click
   const handleModalCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!modalCanvasRef.current || !imageAnalysis || !image || !onFoveaClick) return;
+    if (!modalCanvasRef.current || !imageAnalysis || !image) return;
 
     // Don't process click if we just finished dragging
     if (wasDraggingModalRef.current || wasDraggingModalDiscRef.current) return;
 
+    // Don't allow clicks during GA processing
+    if (isProcessingGA) return;
+
     const canvas = modalCanvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    
-    // Convert from screen pixels to original image pixels
-    const scaleX = image.width / rect.width;
-    const scaleY = image.height / rect.height;
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
+    const { x, y } = getImageCoordinates(e, canvas, image);
+
+    // GATING LOGIC: After fovea is confirmed, ONLY allow GA selection
+    if (handleConfirmedFoveaInteraction(x, y)) {
+      return;
+    }
+
+    if (!onFoveaClick) return;
 
     // Place fovea at clicked position
     onFoveaClick(x, y);
@@ -729,7 +736,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
         } : undefined,
       };
       
-      drawAnnotatedImage(ctx, image, updatedAnalysis, modalScale, null, false, null);
+      drawAnnotatedImage(ctx, image, updatedAnalysis, modalScale, false, null);
     }
   };
 
@@ -738,18 +745,12 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     if (!canvasRef.current || !image || !imageAnalysis) return;
 
     const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    
-    // Convert from screen pixels to original image pixels
-    const scaleX = image.width / rect.width;
-    const scaleY = image.height / rect.height;
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
+    const { x, y } = getImageCoordinates(e, canvas, image);
 
     // Handle dragging disc
     if (isDraggingDiscRef.current && imageAnalysis.disc && onDiscAdjust) {
       const disc = imageAnalysis.disc;
-      const enFaceSplitX = disc.en_face_split_x || 0;
+      const enFaceSplitX = disc.en_face_split_x ?? 0;
 
       if (discDragType === 'top') {
         // Drag top handle - clamp to stay above bottom
@@ -765,9 +766,9 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
         const centerY = y - discDragOffset.dy;
         
         const height = disc.disc_bottom_y - disc.disc_top_y;
-        let newCenterX = Math.max(enFaceSplitX, Math.min(image.width, centerX));
-        let newTopY = Math.max(0, Math.min(image.height - height, centerY - height / 2));
-        let newBottomY = newTopY + height;
+        const newCenterX = Math.max(enFaceSplitX, Math.min(image.width, centerX));
+        const newTopY = Math.max(0, Math.min(image.height - height, centerY - height / 2));
+        const newBottomY = newTopY + height;
         
         onDiscAdjust(newCenterX, newTopY, newBottomY);
       }
@@ -809,8 +810,47 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     );
   }
 
+  const canExpandForFoveaAdjustment = !!imageAnalysis.fovea && !foveaConfirmed;
+  const canExpandForGASelection =
+    !!imageAnalysis.fovea &&
+    foveaConfirmed &&
+    !!imageAnalysis.gaRegions &&
+    !gaConfirmed;
+  const canExpandImage = canExpandForFoveaAdjustment || canExpandForGASelection;
+  const shouldShowManualGAButton = !!imageAnalysis.gaRegions && foveaConfirmed && !gaConfirmed;
+  const manualGAButtonBaseClass =
+    'absolute top-2 left-2 z-10 px-3 py-1.5 text-xs font-semibold rounded-full border shadow-sm transition-colors';
+
+  const getManualGAButtonVariantClass = (variant: 'inline' | 'modal'): string => {
+    if (manualGAMode) {
+      return variant === 'modal'
+        ? 'bg-gray-800/90 hover:bg-gray-900 text-white border-gray-600'
+        : 'bg-gray-700/85 hover:bg-gray-800 text-white border-gray-600';
+    }
+
+    return variant === 'modal'
+      ? 'bg-white/90 hover:bg-white text-gray-900 border-gray-300'
+      : 'bg-white/85 hover:bg-white text-gray-800 border-gray-300';
+  };
+
+  const renderManualGAButton = (variant: 'inline' | 'modal') => {
+    if (!shouldShowManualGAButton) return null;
+
+    return (
+      <button
+        type="button"
+        onClick={onManualGAModeToggle}
+        className={`${manualGAButtonBaseClass} ${getManualGAButtonVariantClass(variant)}`}
+      >
+        {manualGAMode ? 'Cancel Manual' : 'Manual'}
+      </button>
+    );
+  };
+
   return (
-    <div className="card">
+    <div className="card relative">
+      {renderManualGAButton('inline')}
+
       <canvas
         ref={canvasRef}
         onClick={handleCanvasClick}
@@ -861,24 +901,13 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
           )}
           {imageAnalysis.gaRegions && foveaConfirmed && !gaConfirmed && (
             <>
-              <button
-                type="button"
-                onClick={onManualGAModeToggle}
-                className={`mt-2 w-full px-4 py-2 font-semibold rounded transition-colors ${
-                  manualGAMode
-                    ? 'bg-gray-300 hover:bg-gray-400 text-gray-800'
-                    : 'bg-gray-200 hover:bg-gray-300 text-gray-800'
-                }`}
-              >
-                {manualGAMode ? 'Cancel Manual' : 'Select Manually'}
-              </button>
               {manualGAMode ? (
                 <p className="text-sm text-blue-600 font-semibold mt-2">
                   👆 Click on the image to set GA distance point
                 </p>
               ) : imageAnalysis.selectedGARegionIndex === undefined && !imageAnalysis.isManualGAPoint ? (
                 <p className="text-sm text-blue-600 font-semibold mt-2">
-                  👆 Click a GA region to select, or use Select Manually for free-form point selection
+                  👆 Click a GA region to select, or use Manual for free-form point selection
                 </p>
               ) : (
                 <p className="text-sm text-gray-600 mt-2">
@@ -900,13 +929,15 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
         </div>
       )}
 
-      {/* Expand Image Button - only shown before fovea confirmation */}
-      {imageAnalysis?.fovea && !foveaConfirmed && (
+      {/* Expand Image button for fovea and GA precision work */}
+      {canExpandImage && (
         <button
           onClick={() => setModalOpen(true)}
           className="mt-4 w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded transition-colors"
         >
-          🔍 Expand Image for Precise Adjustment
+          {foveaConfirmed
+            ? '🔍 Expand Image for Precise GA Selection'
+            : '🔍 Expand Image for Precise Adjustment'}
         </button>
       )}
 
@@ -930,6 +961,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
             >
               ✕ Close
             </button>
+
+            {renderManualGAButton('modal')}
             
             {/* Modal Canvas */}
             <canvas
@@ -951,17 +984,25 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
                   ? (modalDiscDragType === 'body' ? 'move' : 'ns-resize')
                   : isDraggingModalFovea 
                   ? 'grabbing'
-                  : hoveredModalDiscZone
+                  : !foveaConfirmed && hoveredModalDiscZone
                   ? (hoveredModalDiscZone === 'body' ? 'move' : 'ns-resize')
-                  : isHoveringModalFovea 
+                  : !foveaConfirmed && isHoveringModalFovea 
                   ? 'grab' 
+                  : foveaConfirmed && manualGAMode
+                  ? 'crosshair'
+                  : foveaConfirmed
+                  ? 'pointer'
                   : 'crosshair'
               }}
             />
             
             {/* Instructions */}
             <p className="text-white text-center mt-4 text-lg">
-              Drag fovea (green) or disc bracket handles (red) to adjust
+              {foveaConfirmed
+                ? manualGAMode
+                  ? 'Click to place a manual GA distance point'
+                  : 'Click a GA region, or click any area to segment locally'
+                : 'Drag fovea (green) or disc bracket handles (red) to adjust'}
             </p>
           </div>
         </div>

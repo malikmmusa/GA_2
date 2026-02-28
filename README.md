@@ -208,7 +208,6 @@ OCT_Project/
 │
 ├── tests/
 │   ├── test_disc_detector.py
-│   ├── test_disc_vs_ground_truth.py
 │   ├── test_ga_local_segmentation.py
 │   └── test_image_registration.py
 │
@@ -247,7 +246,7 @@ source venv/bin/activate
 pytest tests/ -v
 
 # Start with auto-reload
-cd src/api && python -m uvicorn main:app --reload --port 8000
+python -m uvicorn src.api.main:app --reload --port 8000
 ```
 
 ### Frontend

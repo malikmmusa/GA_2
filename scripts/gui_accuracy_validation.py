@@ -12,8 +12,8 @@ Workflow:
 3) Capture canvas screenshots, crop en-face, and export side-by-side with raw_marked en-face.
 
 Output:
-  /workspace/test_validation/*.png
-  /workspace/test_validation/summary.csv
+  <project_root>/test_validation/*.png
+  <project_root>/test_validation/summary.csv
 """
 
 from __future__ import annotations
@@ -690,8 +690,10 @@ def main() -> int:
     ensure_dir(args.output_dir)
 
     python_exe = PROJECT_ROOT / "venv" / "bin" / "python"
-    if not args.skip_install_check and not python_exe.exists():
-        raise RuntimeError("Missing venv Python at /workspace/venv/bin/python. Set up environment first.")
+    if args.skip_install_check and not python_exe.exists():
+        python_exe = Path(sys.executable)
+    elif not python_exe.exists():
+        raise RuntimeError(f"Missing venv Python at {python_exe}. Set up environment first.")
 
     image_meta = prepare_image_meta(args.input_dir, args.raw_dir)
     all_files = [args.input_dir / k for k in sorted(image_meta.keys())]
