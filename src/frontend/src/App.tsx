@@ -28,6 +28,8 @@ function App() {
   // Track GA confirmation state for each image
   const [gaConfirmedBefore, setGAConfirmedBefore] = useState(false);
   const [gaConfirmedAfter, setGAConfirmedAfter] = useState(false);
+  const [manualGAModeBefore, setManualGAModeBefore] = useState(false);
+  const [manualGAModeAfter, setManualGAModeAfter] = useState(false);
 
   // Track local GA segmentation processing state
   const [isProcessingLocalGABefore, setIsProcessingLocalGABefore] = useState(false);
@@ -124,11 +126,17 @@ function App() {
     date: string,
     target: 'before' | 'after'
   ) => {
-    // Reset fovea confirmation state when uploading new image
+    // Reset per-image confirmation state when uploading new image
     if (target === 'before') {
       setFoveaConfirmedBefore(false);
+      setGAConfirmedBefore(false);
+      setManualGAModeBefore(false);
+      setGAMessageBefore(null);
     } else {
       setFoveaConfirmedAfter(false);
+      setGAConfirmedAfter(false);
+      setManualGAModeAfter(false);
+      setGAMessageAfter(null);
     }
 
     try {
@@ -361,20 +369,6 @@ function App() {
   };
 
   /**
-   * Handle fovea confirmation button click
-   */
-  const handleFoveaConfirm = async (target: 'before' | 'after') => {
-    if (target === 'before') {
-      setFoveaConfirmedBefore(true);
-    } else {
-      setFoveaConfirmedAfter(true);
-    }
-
-    // Continue to GA segmentation
-    await continueAfterFoveaConfirmation(target);
-  };
-
-  /**
    * Handle unified fovea confirmation for both images
    */
   const handleConfirmBothFoveas = async () => {
@@ -389,6 +383,14 @@ function App() {
       continueAfterFoveaConfirmation('before'),
       continueAfterFoveaConfirmation('after')
     ]);
+  };
+
+  /**
+   * Handle unified GA confirmation for both images (single button)
+   */
+  const handleConfirmBothGA = () => {
+    setGAConfirmedBefore(true);
+    setGAConfirmedAfter(true);
   };
 
   /**
@@ -626,6 +628,7 @@ function App() {
         ...imageAnalysis,
         selectedGARegionIndex: regionIndex,
         distance: distanceResult,
+        isManualGAPoint: false,
       };
 
       setState((prev) => ({
@@ -715,6 +718,7 @@ function App() {
           },
           selectedGARegionIndex: newRegionIndex,
           distance: distanceResult,
+          isManualGAPoint: false,
         };
 
         setState((prev) => ({
@@ -763,6 +767,7 @@ function App() {
       ...imageAnalysis,
       selectedGARegionIndex: undefined,
       distance: undefined,
+      isManualGAPoint: false,
     };
 
     setState((prev) => ({
@@ -771,14 +776,77 @@ function App() {
       progression: null,
     }));
 
-    // Clear any messages
+    if (target === 'before') {
+      setManualGAModeBefore(false);
+      setGAMessageBefore(null);
+    } else {
+      setManualGAModeAfter(false);
+      setGAMessageAfter(null);
+    }
+
+    console.log(`[${target}] GA selection cleared, user can click again`);
+  };
+
+  /**
+   * Toggle manual GA point selection mode
+   */
+  const handleManualGAModeToggle = (target: 'before' | 'after') => {
+    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+    if (!imageAnalysis) return;
+
+    const setManualMode =
+      target === 'before' ? setManualGAModeBefore : setManualGAModeAfter;
+    setManualMode((prev) => !prev);
+
+    const updatedImage: ImageAnalysis = {
+      ...imageAnalysis,
+      selectedGARegionIndex: undefined,
+      distance: undefined,
+      isManualGAPoint: false,
+    };
+
+    setState((prev) => ({
+      ...prev,
+      [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
+      progression: null,
+    }));
+  };
+
+  /**
+   * Handle manual GA point click (distance from fovea to clicked point)
+   */
+  const handleManualGAPoint = (target: 'before' | 'after', x: number, y: number) => {
+    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+    if (!imageAnalysis?.fovea || !imageAnalysis?.disc) return;
+
+    const dx = x - imageAnalysis.fovea.fovea_x;
+    const dy = y - imageAnalysis.fovea.fovea_y;
+    const distancePixels = Math.sqrt(dx * dx + dy * dy);
+    const distanceMicrons = distancePixels * imageAnalysis.disc.pixel_to_micron_ratio;
+
+    const updatedImage: ImageAnalysis = {
+      ...imageAnalysis,
+      selectedGARegionIndex: undefined,
+      distance: {
+        distance_pixels: distancePixels,
+        distance_microns: distanceMicrons,
+        nearest_ga_point_x: x,
+        nearest_ga_point_y: y,
+      },
+      isManualGAPoint: true,
+    };
+
+    setState((prev) => ({
+      ...prev,
+      [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
+      progression: null,
+    }));
+
     if (target === 'before') {
       setGAMessageBefore(null);
     } else {
       setGAMessageAfter(null);
     }
-
-    console.log(`[${target}] GA selection cleared, user can click again`);
   };
 
   /**
@@ -835,8 +903,12 @@ function App() {
                   handleGARegionSelect('before', regionIndex)
                 }
                 onGAAreaClick={(x, y) => handleGAAreaClick('before', x, y)}
+                onManualGAPointClick={(x, y) => handleManualGAPoint('before', x, y)}
+                onManualGAModeToggle={() => handleManualGAModeToggle('before')}
                 onDiscAdjust={(centerX, topY, bottomY) => handleDiscAdjust('before', centerX, topY, bottomY)}
                 foveaConfirmed={foveaConfirmedBefore}
+                gaConfirmed={gaConfirmedBefore}
+                manualGAMode={manualGAModeBefore}
                 isProcessingGA={isProcessingLocalGABefore}
               />
               {foveaConfirmedBefore && state.imageBefore?.fovea && (
@@ -845,20 +917,13 @@ function App() {
               {gaMessageBefore && (
                 <p className="text-sm text-orange-600 mt-2">{gaMessageBefore}</p>
               )}
-              {/* GA Confirmation Buttons */}
-              {foveaConfirmedBefore && 
-               state.imageBefore?.selectedGARegionIndex !== undefined &&
+              {foveaConfirmedBefore &&
+               (state.imageBefore?.selectedGARegionIndex !== undefined || state.imageBefore?.distance) &&
                !gaConfirmedBefore && (
-                <div className="mt-4 flex gap-2">
-                  <button
-                    onClick={() => setGAConfirmedBefore(true)}
-                    className="btn-primary flex-1"
-                  >
-                    Confirm GA Region
-                  </button>
+                <div className="mt-4">
                   <button
                     onClick={() => handleGARetry('before')}
-                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded transition-colors"
+                    className="w-full px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded transition-colors"
                   >
                     Try Again
                   </button>
@@ -892,8 +957,12 @@ function App() {
                   handleGARegionSelect('after', regionIndex)
                 }
                 onGAAreaClick={(x, y) => handleGAAreaClick('after', x, y)}
+                onManualGAPointClick={(x, y) => handleManualGAPoint('after', x, y)}
+                onManualGAModeToggle={() => handleManualGAModeToggle('after')}
                 onDiscAdjust={(centerX, topY, bottomY) => handleDiscAdjust('after', centerX, topY, bottomY)}
                 foveaConfirmed={foveaConfirmedAfter}
+                gaConfirmed={gaConfirmedAfter}
+                manualGAMode={manualGAModeAfter}
                 isProcessingGA={isProcessingLocalGAAfter}
                 registrationSuggestion={registrationResult && registrationResult.status === 'low_confidence' ? {
                   fovea_x: registrationResult.transformed_fovea_x,
@@ -920,20 +989,13 @@ function App() {
               {gaMessageAfter && (
                 <p className="text-sm text-orange-600 mt-2">{gaMessageAfter}</p>
               )}
-              {/* GA Confirmation Buttons */}
-              {foveaConfirmedAfter && 
-               state.imageAfter?.selectedGARegionIndex !== undefined &&
+              {foveaConfirmedAfter &&
+               (state.imageAfter?.selectedGARegionIndex !== undefined || state.imageAfter?.distance) &&
                !gaConfirmedAfter && (
-                <div className="mt-4 flex gap-2">
-                  <button
-                    onClick={() => setGAConfirmedAfter(true)}
-                    className="btn-primary flex-1"
-                  >
-                    Confirm GA Region
-                  </button>
+                <div className="mt-4">
                   <button
                     onClick={() => handleGARetry('after')}
-                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded transition-colors"
+                    className="w-full px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold rounded transition-colors"
                   >
                     Try Again
                   </button>
@@ -957,6 +1019,28 @@ function App() {
               className="btn-primary w-full max-w-2xl mx-auto block"
             >
               Confirm Fovea on Both Images & Continue
+            </button>
+          </div>
+        )}
+
+        {/* Unified GA Confirmation Button */}
+        {foveaConfirmedBefore &&
+         foveaConfirmedAfter &&
+         state.imageBefore?.distance &&
+         state.imageAfter?.distance &&
+         (!gaConfirmedBefore || !gaConfirmedAfter) && (
+          <div className="mb-8">
+            <button
+              onClick={handleConfirmBothGA}
+              disabled={
+                state.isProcessingBefore ||
+                state.isProcessingAfter ||
+                isProcessingLocalGABefore ||
+                isProcessingLocalGAAfter
+              }
+              className="btn-primary w-full max-w-2xl mx-auto block"
+            >
+              Confirm GA Regions on Both Images
             </button>
           </div>
         )}

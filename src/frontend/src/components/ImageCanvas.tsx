@@ -19,8 +19,12 @@ interface ImageCanvasProps {
   onFoveaClick?: (x: number, y: number) => void;
   onGARegionClick?: (regionIndex: number) => void;
   onGAAreaClick?: (x: number, y: number) => void;
+  onManualGAPointClick?: (x: number, y: number) => void;
+  onManualGAModeToggle?: () => void;
   onDiscAdjust?: (centerX: number, topY: number, bottomY: number) => void;
   foveaConfirmed?: boolean;
+  gaConfirmed?: boolean;
+  manualGAMode?: boolean;
   isProcessingGA?: boolean;
   registrationSuggestion?: {
     fovea_x: number;
@@ -94,10 +98,11 @@ function drawAnnotatedImage(
   image: HTMLImageElement,
   imageAnalysis: ImageAnalysis,
   scale: number,
-  hoveredRegionIndex: number | null,
+  _hoveredRegionIndex: number | null,
   foveaConfirmed: boolean,
   hoveredDiscZone: 'top' | 'bottom' | 'body' | null = null,
-  registrationSuggestion?: { fovea_x: number; fovea_y: number }
+  registrationSuggestion?: { fovea_x: number; fovea_y: number },
+  manualGAMode: boolean = false
 ): void {
   // Draw image
   ctx.drawImage(image, 0, 0, image.width * scale, image.height * scale);
@@ -198,8 +203,14 @@ function drawAnnotatedImage(
     ctx.stroke();
   }
 
-  // Draw GA region (only the selected one, if any)
-  if (imageAnalysis.gaRegions?.regions && foveaConfirmed && imageAnalysis.selectedGARegionIndex !== undefined) {
+  // Draw GA region (only the selected one, if any; skip when manual mode or manual point)
+  if (
+    imageAnalysis.gaRegions?.regions &&
+    foveaConfirmed &&
+    imageAnalysis.selectedGARegionIndex !== undefined &&
+    !imageAnalysis.isManualGAPoint &&
+    !manualGAMode
+  ) {
     const selectedIndex = imageAnalysis.selectedGARegionIndex;
     const region = imageAnalysis.gaRegions.regions[selectedIndex];
     
@@ -232,8 +243,12 @@ function drawAnnotatedImage(
     }
   }
 
-  // Draw distance measurement line (cyan)
-  if (imageAnalysis.distance && imageAnalysis.fovea) {
+  // Draw distance measurement line (cyan); hide when in manual mode without a point set
+  if (
+    imageAnalysis.distance &&
+    imageAnalysis.fovea &&
+    !(manualGAMode && !imageAnalysis.isManualGAPoint)
+  ) {
     ctx.strokeStyle = 'rgb(0, 255, 255)';
     ctx.lineWidth = 2;
     ctx.beginPath();
@@ -254,15 +269,19 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   onFoveaClick,
   onGARegionClick,
   onGAAreaClick,
+  onManualGAPointClick,
+  onManualGAModeToggle,
   onDiscAdjust,
   foveaConfirmed = false,
+  gaConfirmed = false,
+  manualGAMode = false,
   isProcessingGA = false,
   registrationSuggestion,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const modalCanvasRef = useRef<HTMLCanvasElement>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
-  const [hoveredRegionIndex, setHoveredRegionIndex] = useState<number | null>(null);
+  const [hoveredRegionIndex, _setHoveredRegionIndex] = useState<number | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   
   // Fovea drag state
@@ -319,8 +338,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     canvas.height = image.height * newScale;
 
     // Use helper function to draw everything
-    drawAnnotatedImage(ctx, image, imageAnalysis, newScale, hoveredRegionIndex, foveaConfirmed, hoveredDiscZone, registrationSuggestion);
-  }, [image, imageAnalysis, hoveredRegionIndex, foveaConfirmed, hoveredDiscZone, registrationSuggestion]);
+    drawAnnotatedImage(ctx, image, imageAnalysis, newScale, hoveredRegionIndex, foveaConfirmed, hoveredDiscZone, registrationSuggestion, manualGAMode);
+  }, [image, imageAnalysis, hoveredRegionIndex, foveaConfirmed, hoveredDiscZone, registrationSuggestion, manualGAMode]);
 
   // Draw modal canvas when modal is open
   useEffect(() => {
@@ -339,7 +358,7 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     canvas.height = image.height * modalScale;
 
     // Use helper function to draw everything
-    drawAnnotatedImage(ctx, image, imageAnalysis, modalScale, null, false, null);
+    drawAnnotatedImage(ctx, image, imageAnalysis, modalScale, null, false, null, undefined, false);
   }, [modalOpen, image, imageAnalysis, foveaConfirmed]);
 
   // Handle Escape key to close modal
@@ -447,6 +466,11 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
       // Restrict clicks to en-face region
       if (imageAnalysis.disc?.en_face_split_x !== undefined && x < imageAnalysis.disc.en_face_split_x) {
         console.log('[GA] Click on B-scan side ignored');
+        return;
+      }
+
+      if (manualGAMode && onManualGAPointClick) {
+        onManualGAPointClick(x, y);
         return;
       }
 
@@ -809,6 +833,8 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
             ? (hoveredDiscZone === 'body' ? 'move' : 'ns-resize')
             : isHoveringFovea && !foveaConfirmed 
             ? 'grab' 
+            : foveaConfirmed && manualGAMode
+            ? 'crosshair'
             : 'pointer'
         }}
       />
@@ -833,19 +859,34 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
               )}
             </>
           )}
-          {imageAnalysis.gaRegions && foveaConfirmed && (
+          {imageAnalysis.gaRegions && foveaConfirmed && !gaConfirmed && (
             <>
-              {imageAnalysis.selectedGARegionIndex === undefined ? (
-                <p className="text-sm text-blue-600 font-semibold">
-                  👆 Click on the GA area you want to analyze
+              <button
+                type="button"
+                onClick={onManualGAModeToggle}
+                className={`mt-2 w-full px-4 py-2 font-semibold rounded transition-colors ${
+                  manualGAMode
+                    ? 'bg-gray-300 hover:bg-gray-400 text-gray-800'
+                    : 'bg-gray-200 hover:bg-gray-300 text-gray-800'
+                }`}
+              >
+                {manualGAMode ? 'Cancel Manual' : 'Select Manually'}
+              </button>
+              {manualGAMode ? (
+                <p className="text-sm text-blue-600 font-semibold mt-2">
+                  👆 Click on the image to set GA distance point
+                </p>
+              ) : imageAnalysis.selectedGARegionIndex === undefined && !imageAnalysis.isManualGAPoint ? (
+                <p className="text-sm text-blue-600 font-semibold mt-2">
+                  👆 Click a GA region to select, or use Select Manually for free-form point selection
                 </p>
               ) : (
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-gray-600 mt-2">
                   ✓ GA region selected
                 </p>
               )}
               {isProcessingGA && (
-                <p className="text-sm text-orange-600 font-semibold">
+                <p className="text-sm text-orange-600 font-semibold mt-2">
                   ⏳ Analyzing selected area...
                 </p>
               )}

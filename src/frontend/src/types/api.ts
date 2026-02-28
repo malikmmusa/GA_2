@@ -93,6 +93,8 @@ export interface ImageAnalysis {
   gaRegions?: GASegmentationResponse;
   selectedGARegionIndex?: number;
   distance?: DistanceCalculationResponse;
+  /** True when distance was set by manual point click (not a segmented region) */
+  isManualGAPoint?: boolean;
 }
 
 /**
