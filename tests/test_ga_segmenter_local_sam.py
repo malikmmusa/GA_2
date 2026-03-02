@@ -9,13 +9,9 @@ Expected failures (RED):
 
 Do NOT modify ga_segmenter.py until RED failures are confirmed.
 """
-import os
-import sys
 import numpy as np
 import unittest
 from unittest.mock import patch, MagicMock
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.api.services.ga_segmenter import GASegmenterService  # noqa: E402
 
@@ -168,5 +164,3 @@ class TestSegmentGALocalFallback(unittest.TestCase):
         self.assertIsInstance(result, list, "Result must be a list (K-means fallback ran)")
 
 
-if __name__ == "__main__":
-    unittest.main()

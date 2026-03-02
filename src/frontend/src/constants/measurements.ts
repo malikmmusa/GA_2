@@ -1,0 +1,1 @@
+export const OPTIC_DISC_DIAMETER_MICRONS = 1800;

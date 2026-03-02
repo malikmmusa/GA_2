@@ -7,13 +7,9 @@ Expected failures:
 
 Do NOT modify ga_segmenter.py until GREEN phase is approved.
 """
-import os
-import sys
 import numpy as np
 import unittest
 from unittest.mock import patch, MagicMock
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.api.services.ga_segmenter import GASegmenterService  # noqa: E402
 
@@ -209,5 +205,3 @@ class TestGASegmenterRGBConversion(unittest.TestCase):
         self.assertEqual(int(passed_image[100, 100, 2]), 200)  # B channel
 
 
-if __name__ == "__main__":
-    unittest.main()

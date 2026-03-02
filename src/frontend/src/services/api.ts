@@ -18,23 +18,36 @@ const API_BASE_URL = '/api';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json',
-  },
 });
+
+type MultipartFieldValue = string | Blob;
+type QueryValue = string | number | boolean | null | undefined;
+
+function createFormData(fields: Array<[string, MultipartFieldValue]>): FormData {
+  const formData = new FormData();
+  fields.forEach(([name, value]) => {
+    formData.append(name, value);
+  });
+  return formData;
+}
+
+function buildQueryString(params: Record<string, QueryValue>): string {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined) return;
+    searchParams.append(key, String(value));
+  });
+
+  const serialized = searchParams.toString();
+  return serialized ? `?${serialized}` : '';
+}
 
 /**
  * Detect optic disc in an OCT image
  */
 export async function detectDisc(imageFile: File): Promise<DiscDetectionResponse> {
-  const formData = new FormData();
-  formData.append('file', imageFile);
-
-  const response = await api.post<DiscDetectionResponse>('/detect-disc', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-  });
+  const formData = createFormData([['file', imageFile]]);
+  const response = await api.post<DiscDetectionResponse>('/detect-disc', formData);
 
   return response.data;
 }
@@ -46,15 +59,11 @@ export async function detectFovea(
   imageFile: File,
   request: FoveaDetectionRequest
 ): Promise<FoveaDetectionResponse> {
-  const formData = new FormData();
-  formData.append('file', imageFile);
-  formData.append('request_data', JSON.stringify(request));
-
-  const response = await api.post<FoveaDetectionResponse>('/detect-fovea', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-  });
+  const formData = createFormData([
+    ['file', imageFile],
+    ['request_data', JSON.stringify(request)],
+  ]);
+  const response = await api.post<FoveaDetectionResponse>('/detect-fovea', formData);
 
   return response.data;
 }
@@ -73,24 +82,16 @@ export async function segmentGA(
     fovea_y?: number;
   }
 ): Promise<GASegmentationResponse> {
-  const formData = new FormData();
-  formData.append('file', imageFile);
-
-  const params = new URLSearchParams();
-  if (options?.disc_center_x !== undefined) params.append('disc_center_x', options.disc_center_x.toString());
-  if (options?.disc_center_y !== undefined) params.append('disc_center_y', options.disc_center_y.toString());
-  if (options?.disc_height_pixels !== undefined) params.append('disc_height_pixels', options.disc_height_pixels.toString());
-  if (options?.en_face_split_x !== undefined) params.append('en_face_split_x', options.en_face_split_x.toString());
-  if (options?.fovea_x !== undefined) params.append('fovea_x', options.fovea_x.toString());
-  if (options?.fovea_y !== undefined) params.append('fovea_y', options.fovea_y.toString());
-
-  const url = `/segment-ga${params.toString() ? '?' + params.toString() : ''}`;
-
-  const response = await api.post<GASegmentationResponse>(url, formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
+  const formData = createFormData([['file', imageFile]]);
+  const queryString = buildQueryString({
+    disc_center_x: options?.disc_center_x,
+    disc_center_y: options?.disc_center_y,
+    disc_height_pixels: options?.disc_height_pixels,
+    en_face_split_x: options?.en_face_split_x,
+    fovea_x: options?.fovea_x,
+    fovea_y: options?.fovea_y,
   });
+  const response = await api.post<GASegmentationResponse>(`/segment-ga${queryString}`, formData);
 
   return response.data;
 }
@@ -109,24 +110,19 @@ export async function segmentGALocal(
     en_face_split_x?: number;
   }
 ): Promise<GASegmentationResponse> {
-  const formData = new FormData();
-  formData.append('file', imageFile);
-
-  const params = new URLSearchParams();
-  params.append('click_x', clickX.toString());
-  params.append('click_y', clickY.toString());
-  if (options?.disc_center_x !== undefined) params.append('disc_center_x', options.disc_center_x.toString());
-  if (options?.disc_center_y !== undefined) params.append('disc_center_y', options.disc_center_y.toString());
-  if (options?.disc_height_pixels !== undefined) params.append('disc_height_pixels', options.disc_height_pixels.toString());
-  if (options?.en_face_split_x !== undefined) params.append('en_face_split_x', options.en_face_split_x.toString());
-
-  const url = `/segment-ga-local?${params.toString()}`;
-
-  const response = await api.post<GASegmentationResponse>(url, formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
+  const formData = createFormData([['file', imageFile]]);
+  const queryString = buildQueryString({
+    click_x: clickX,
+    click_y: clickY,
+    disc_center_x: options?.disc_center_x,
+    disc_center_y: options?.disc_center_y,
+    disc_height_pixels: options?.disc_height_pixels,
+    en_face_split_x: options?.en_face_split_x,
   });
+  const response = await api.post<GASegmentationResponse>(
+    `/segment-ga-local${queryString}`,
+    formData
+  );
 
   return response.data;
 }
@@ -166,16 +162,12 @@ export async function registerImages(
     disc_center_y?: number;
   }
 ): Promise<ImageRegistrationResponse> {
-  const formData = new FormData();
-  formData.append('file_reference', referenceFile);
-  formData.append('file_new', newFile);
-  formData.append('request_data', JSON.stringify(request));
-
-  const response = await api.post<ImageRegistrationResponse>('/register-images', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-  });
+  const formData = createFormData([
+    ['file_reference', referenceFile],
+    ['file_new', newFile],
+    ['request_data', JSON.stringify(request)],
+  ]);
+  const response = await api.post<ImageRegistrationResponse>('/register-images', formData);
 
   return response.data;
 }

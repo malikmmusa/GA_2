@@ -1,15 +1,14 @@
 """GA Segmentation Service - Single-cluster selection with texture validation"""
+from typing import List, Optional, Tuple
+
 import cv2
 import numpy as np
-from typing import List, Tuple, Dict, Optional
 from scipy import ndimage
-import sys
-import os
 
-# Import legacy utilities
-sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
+from ..utils.logger import get_logger
+from .sam_refiner import SAMRefiner
 
-from src.api.services.sam_refiner import SAMRefiner
+logger = get_logger("services.ga_segmenter")
 
 
 class GASegmenterService:
@@ -137,20 +136,16 @@ class GASegmenterService:
         return result
     
     def _score_region_anatomy_aware(self,
-                                      contour: np.ndarray,
-                                      image_shape: Tuple[int, int],
-                                      disc_center: Optional[Tuple[float, float]] = None,
-                                      fovea_pos: Optional[Tuple[float, float]] = None,
-                                      eye_side: Optional[str] = None) -> float:
+                                    contour: np.ndarray,
+                                    image_shape: Tuple[int, int],
+                                    fovea_pos: Optional[Tuple[float, float]] = None) -> float:
         """
         Score a GA region based on anatomical likelihood.
         
         Args:
             contour: OpenCV contour
             image_shape: (height, width) of en-face image
-            disc_center: (x, y) of disc center in local coordinates
             fovea_pos: (x, y) of fovea in local coordinates
-            eye_side: "OD" or "OS"
             
         Returns:
             Anatomical likelihood score (higher = more likely)
@@ -343,8 +338,6 @@ class GASegmenterService:
         candidates = []
         
         fovea_local = (fovea_x_local, fovea_y_local) if fovea_x_local is not None and fovea_y_local is not None else None
-        disc_local = (disc_center_x_local, disc_center_y) if disc_center_x_local is not None and disc_center_y is not None else None
-        
         for cnt in contours:
             area = cv2.contourArea(cnt)
             
@@ -369,7 +362,7 @@ class GASegmenterService:
             
             # 4. Anatomy-aware scoring
             anatomy_score = self._score_region_anatomy_aware(
-                cnt, gray.shape, disc_local, fovea_local
+                cnt, gray.shape, fovea_local
             )
             
             # Store with score
@@ -488,16 +481,24 @@ class GASegmenterService:
         gray_crop = gray[y1:y2, x1:x2]
         
         if gray_crop.size == 0:
-            print(f"  [GA-Local] Empty crop at ({click_x_local:.1f}, {click_y_local:.1f})")
+            logger.debug("GA-local empty crop at (%.1f, %.1f)", click_x_local, click_y_local)
             return []
         
-        print(f"  [GA-Local] Click: ({click_x_local:.1f}, {click_y_local:.1f}), Crop: [{x1}:{x2}, {y1}:{y2}], Size: {gray_crop.shape}")
+        logger.debug(
+            "GA-local click: (%.1f, %.1f), crop: [%s:%s, %s:%s], size: %s",
+            click_x_local,
+            click_y_local,
+            x1,
+            x2,
+            y1,
+            y2,
+            gray_crop.shape,
+        )
         
         # Apply CLAHE enhancement
         enhanced_crop = self._apply_clahe(gray_crop)
         
         # Mask out Optic Disc if coordinates provided and disc is in crop
-        disc_mask_crop = None
         if disc_center_x_local is not None and disc_center_y is not None and disc_height_pixels is not None:
             # Check if disc center is within crop bounds (with margin)
             disc_radius = int(disc_height_pixels * self.disc_exclusion_multiplier)
@@ -555,10 +556,14 @@ class GASegmenterService:
         
         if selected_cluster == -1:
             # Click was on masked (disc) area
-            print(f"  [GA-Local] Click on masked area (disc)")
+            logger.debug("GA-local click on masked disc area")
             return []
         
-        print(f"  [GA-Local] Selected cluster: {selected_cluster} (intensity: {centers[selected_cluster][0]:.1f})")
+        logger.debug(
+            "GA-local selected cluster: %s (intensity: %.1f)",
+            selected_cluster,
+            centers[selected_cluster][0],
+        )
         
         # Create lesion mask from selected cluster
         lesion_mask = (labels_crop == selected_cluster).astype(np.uint8) * 255
@@ -577,7 +582,7 @@ class GASegmenterService:
         )
         
         if not contours_crop:
-            print(f"  [GA-Local] No contours found after morphology")
+            logger.debug("GA-local no contours found after morphology")
             return []
         
         # Relaxed filtering (lower min_area)
@@ -601,7 +606,7 @@ class GASegmenterService:
             valid_contours.append(cnt)
         
         if not valid_contours:
-            print(f"  [GA-Local] No valid contours after filtering")
+            logger.debug("GA-local no valid contours after filtering")
             return []
         
         # Find contour containing or nearest to click point
@@ -628,7 +633,7 @@ class GASegmenterService:
                     best_contour = cnt
         
         if best_contour is None:
-            print(f"  [GA-Local] No contour found near click")
+            logger.debug("GA-local no contour found near click")
             return []
         
         # Adjust contour back to en-face coordinates
@@ -640,7 +645,7 @@ class GASegmenterService:
         if en_face_split_x is not None:
             adjusted[:, 0, 0] += en_face_split_x
         
-        print(f"  [GA-Local] Found region with area: {cv2.contourArea(best_contour):.0f} px²")
+        logger.debug("GA-local found region area: %.0f px²", cv2.contourArea(best_contour))
         
         return [adjusted]
     

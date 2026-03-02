@@ -2,16 +2,22 @@
  * Main Application Component
  * Orchestrates the complete workflow for GA progression analysis
  */
-import { useState, useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import type { SetStateAction } from 'react';
 import { ImageUpload } from './components/ImageUpload';
 import { ImageCanvas } from './components/ImageCanvas';
 import { ResultsPanel } from './components/ResultsPanel';
 import * as api from './services/api';
 import type { ImageAnalysis, AppState, ImageRegistrationResponse } from './types/api';
 import { extractErrorMessage } from './utils/errorHandling';
+import { OPTIC_DISC_DIAMETER_MICRONS } from './constants/measurements';
 import './index.css';
 
 function App() {
+  type Target = 'before' | 'after';
+  type ImageStateKey = 'imageBefore' | 'imageAfter';
+  type ProcessingStateKey = 'isProcessingBefore' | 'isProcessingAfter';
+
   const [state, setState] = useState<AppState>({
     imageBefore: null,
     imageAfter: null,
@@ -43,6 +49,101 @@ function App() {
   const [registrationResult, setRegistrationResult] = useState<ImageRegistrationResponse | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
 
+  const getImageKey = (target: Target): ImageStateKey =>
+    target === 'before' ? 'imageBefore' : 'imageAfter';
+  const getProcessingKey = (target: Target): ProcessingStateKey =>
+    target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter';
+  const getImageAnalysis = (target: Target, appState: AppState = state): ImageAnalysis | null =>
+    appState[getImageKey(target)];
+  const isFoveaConfirmedForTarget = (target: Target): boolean =>
+    target === 'before' ? foveaConfirmedBefore : foveaConfirmedAfter;
+  const setLocalGAProcessingForTarget = (target: Target, value: boolean): void => {
+    if (target === 'before') {
+      setIsProcessingLocalGABefore(value);
+      return;
+    }
+    setIsProcessingLocalGAAfter(value);
+  };
+  const setGAMessageForTarget = (target: Target, value: string | null): void => {
+    if (target === 'before') {
+      setGAMessageBefore(value);
+      return;
+    }
+    setGAMessageAfter(value);
+  };
+  const setManualGAModeForTarget = (
+    target: Target,
+    value: SetStateAction<boolean>
+  ): void => {
+    if (target === 'before') {
+      setManualGAModeBefore(value);
+      return;
+    }
+    setManualGAModeAfter(value);
+  };
+  const resetTargetConfirmationState = (target: Target): void => {
+    if (target === 'before') {
+      setFoveaConfirmedBefore(false);
+      setGAConfirmedBefore(false);
+      setManualGAModeBefore(false);
+      setGAMessageBefore(null);
+      return;
+    }
+    setFoveaConfirmedAfter(false);
+    setGAConfirmedAfter(false);
+    setManualGAModeAfter(false);
+    setGAMessageAfter(null);
+  };
+  const setTargetProcessingState = (
+    target: Target,
+    isProcessing: boolean,
+    error: string | null = null
+  ): void => {
+    const processingKey = getProcessingKey(target);
+    setState((prev) => ({
+      ...prev,
+      [processingKey]: isProcessing,
+      error,
+    }));
+  };
+  const setTargetImageState = (
+    target: Target,
+    image: ImageAnalysis,
+    options: { clearProgression?: boolean; isProcessing?: boolean } = {}
+  ): void => {
+    const { clearProgression = true, isProcessing } = options;
+    const imageKey = getImageKey(target);
+    const processingUpdate =
+      isProcessing === undefined ? {} : { [getProcessingKey(target)]: isProcessing };
+
+    setState((prev) => ({
+      ...prev,
+      [imageKey]: image,
+      ...processingUpdate,
+      ...(clearProgression ? { progression: null } : {}),
+    }));
+  };
+  const mergeTargetImageState = (
+    target: Target,
+    merge: (current: ImageAnalysis) => ImageAnalysis,
+    options: { clearProgression?: boolean; isProcessing?: boolean } = {}
+  ): void => {
+    const { clearProgression = true, isProcessing } = options;
+    const imageKey = getImageKey(target);
+    const processingKey = getProcessingKey(target);
+
+    setState((prev) => {
+      const current = prev[imageKey];
+      if (!current) return prev;
+      return {
+        ...prev,
+        [imageKey]: merge(current),
+        ...(isProcessing === undefined ? {} : { [processingKey]: isProcessing }),
+        ...(clearProgression ? { progression: null } : {}),
+      };
+    });
+  };
+
   /**
    * Cleanup URL.createObjectURL when component unmounts or images change
    * Prevents memory leaks
@@ -63,26 +164,25 @@ function App() {
    * Runs once to get the transform matrix for live fovea transfer
    */
   useEffect(() => {
+    const imageBefore = state.imageBefore;
+    const imageAfter = state.imageAfter;
     const canRegister =
-      state.imageBefore?.disc &&
-      state.imageBefore?.fovea &&
-      state.imageBefore?.imageFile &&
-      state.imageAfter?.disc &&
-      state.imageAfter?.fovea &&
-      state.imageAfter?.imageFile &&
+      imageBefore?.disc &&
+      imageBefore?.fovea &&
+      imageBefore?.imageFile &&
+      imageAfter?.disc &&
+      imageAfter?.fovea &&
+      imageAfter?.imageFile &&
       !registrationResult &&
       !isRegistering;
 
-    if (canRegister) {
-      attemptRegistration(state.imageBefore!, state.imageAfter!);
+    if (canRegister && imageBefore && imageAfter) {
+      void attemptRegistration(imageBefore, imageAfter);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    state.imageBefore?.disc,
-    state.imageBefore?.fovea,
-    state.imageBefore?.imageFile,
-    state.imageAfter?.disc,
-    state.imageAfter?.fovea,
-    state.imageAfter?.imageFile,
+    state.imageBefore,
+    state.imageAfter,
     registrationResult,
     isRegistering,
   ]);
@@ -92,25 +192,25 @@ function App() {
    * This prevents infinite loops by using useEffect instead of calling during setState
    */
   useEffect(() => {
+    const imageBefore = state.imageBefore;
+    const imageAfter = state.imageAfter;
     const canCalculateProgression =
-      state.imageBefore?.distance &&
-      state.imageAfter?.distance &&
-      state.imageBefore?.fovea &&
-      state.imageAfter?.fovea &&
+      imageBefore?.distance &&
+      imageAfter?.distance &&
+      imageBefore?.fovea &&
+      imageAfter?.fovea &&
       gaConfirmedBefore &&
       gaConfirmedAfter &&
       !state.progression &&
       !state.isProcessingBefore &&
       !state.isProcessingAfter;
 
-    if (canCalculateProgression) {
-      calculateProgression(state.imageBefore!, state.imageAfter!);
+    if (canCalculateProgression && imageBefore && imageAfter) {
+      void calculateProgression(imageBefore, imageAfter);
     }
   }, [
-    state.imageBefore?.distance,
-    state.imageAfter?.distance,
-    state.imageBefore?.fovea,
-    state.imageAfter?.fovea,
+    state.imageBefore,
+    state.imageAfter,
     gaConfirmedBefore,
     gaConfirmedAfter,
     state.progression,
@@ -124,30 +224,22 @@ function App() {
   const processImage = async (
     file: File,
     date: string,
-    target: 'before' | 'after'
+    target: Target
   ) => {
     // Reset per-image confirmation state when uploading new image
-    if (target === 'before') {
-      setFoveaConfirmedBefore(false);
-      setGAConfirmedBefore(false);
-      setManualGAModeBefore(false);
-      setGAMessageBefore(null);
-    } else {
-      setFoveaConfirmedAfter(false);
-      setGAConfirmedAfter(false);
-      setManualGAModeAfter(false);
-      setGAMessageAfter(null);
-    }
+    resetTargetConfirmationState(target);
+    setRegistrationResult(null);
 
+    const previousImageUrl = getImageAnalysis(target)?.imageUrl ?? null;
+    let imageUrl: string | null = null;
     try {
-      setState((prev) => ({ 
-        ...prev, 
-        [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: true, 
-        error: null 
-      }));
+      setTargetProcessingState(target, true);
 
       // Create image URL for display
-      const imageUrl = URL.createObjectURL(file);
+      imageUrl = URL.createObjectURL(file);
+      if (previousImageUrl && previousImageUrl !== imageUrl) {
+        URL.revokeObjectURL(previousImageUrl);
+      }
 
       // Initialize image analysis object
       const imageAnalysis: ImageAnalysis = {
@@ -157,12 +249,10 @@ function App() {
       };
 
       // Step 1: Detect disc
-      console.log(`[${target}] Detecting disc...`);
       const discResult = await api.detectDisc(file);
       imageAnalysis.disc = discResult;
 
       // Step 2: Detect fovea
-      console.log(`[${target}] Detecting fovea...`);
       const foveaResult = await api.detectFovea(file, {
         disc_center_x: discResult.disc_center_x,
         disc_center_y: discResult.disc_center_y,
@@ -171,30 +261,23 @@ function App() {
         use_manual_adjustment: false,
       });
       imageAnalysis.fovea = foveaResult;
-
-      console.log(`[${target}] Fovea detected. Waiting for user confirmation...`);
       // STOP HERE - Do not auto-proceed to GA segmentation
       // User must confirm fovea location before continuing
 
       // Update state (progression will be calculated by useEffect)
-      setState((prev) => ({
-        ...prev,
-        [target === 'before' ? 'imageBefore' : 'imageAfter']: imageAnalysis,
-        [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: false,
-        progression: null, // Clear old progression to trigger recalculation
-      }));
-
-      console.log(`[${target}] Analysis complete!`);
+      setTargetImageState(target, imageAnalysis, { isProcessing: false, clearProgression: true });
 
       // NOTE: Registration is triggered automatically via useEffect when both images are loaded.
       // Live fovea transfer happens during drag via handleFoveaAdjust + transform matrix.
-    } catch (error: any) {
-      console.error(`[${target}] Error:`, error);
-      setState((prev) => ({
-        ...prev,
-        [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: false,
-        error: extractErrorMessage(error, `Failed to process ${target} image`),
-      }));
+    } catch (error: unknown) {
+      if (imageUrl) {
+        URL.revokeObjectURL(imageUrl);
+      }
+      setTargetProcessingState(
+        target,
+        false,
+        extractErrorMessage(error, `Failed to process ${target} image`)
+      );
     }
   };
 
@@ -203,7 +286,7 @@ function App() {
    * returning the corresponding point in Image 2 space.
    * Pure math, no API call -- instant.
    */
-  const applyTransformToFovea = (
+  const applyTransformToFovea = useCallback((
     foveaX: number,
     foveaY: number,
     reg: ImageRegistrationResponse
@@ -230,24 +313,22 @@ function App() {
       x: newLocalX + splitNew,
       y: newLocalY,
     };
-  };
+  }, []);
 
   /**
    * Attempt to register Image 2 to Image 1 and store the transform matrix.
    * Called once when both images are loaded.
    */
-  const attemptRegistration = async (
+  const attemptRegistration = useCallback(async (
     imageBefore: ImageAnalysis,
     imageAfter: ImageAnalysis
   ) => {
     if (!imageBefore.imageFile || !imageAfter.imageFile || !imageBefore.fovea || !imageBefore.disc || !imageAfter.disc) {
-      console.log('[registration] Missing required data for registration');
       return;
     }
 
     try {
       setIsRegistering(true);
-      console.log('[registration] Starting registration...');
 
       const result = await api.registerImages(
         imageBefore.imageFile,
@@ -263,7 +344,6 @@ function App() {
       );
 
       setRegistrationResult(result);
-      console.log(`[registration] Result: ${result.status}, confidence: ${result.confidence.toFixed(2)}, hasMatrix: ${!!result.transform_matrix}`);
 
       // If registration succeeded (any confidence), immediately apply the transform
       // to update Image 2's fovea based on Image 1's current fovea
@@ -275,7 +355,6 @@ function App() {
         );
 
         if (transformed) {
-          console.log(`[registration] Applying registered fovea to Image 2: (${transformed.x.toFixed(1)}, ${transformed.y.toFixed(1)})`);
           setState((prev) => {
             if (!prev.imageAfter?.fovea) return prev;
             return {
@@ -293,78 +372,50 @@ function App() {
           });
         }
       }
-    } catch (error: any) {
-      console.error('[registration] Error:', error);
+    } catch {
+      setRegistrationResult(null);
     } finally {
       setIsRegistering(false);
     }
-  };
+  }, [applyTransformToFovea]);
 
   /**
    * Continue processing after fovea confirmation (Steps 3-4: GA segmentation + distance)
    */
-  const continueAfterFoveaConfirmation = async (target: 'before' | 'after') => {
-    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+  const continueAfterFoveaConfirmation = async (target: Target) => {
+    const imageAnalysis = getImageAnalysis(target);
     
     if (!imageAnalysis || !imageAnalysis.fovea || !imageAnalysis.disc || !imageAnalysis.imageFile) {
-      console.error(`[${target}] Cannot continue: missing fovea or disc data`);
       return;
     }
 
     try {
-      setState((prev) => ({ 
-        ...prev, 
-        [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: true, 
-        error: null 
-      }));
+      setTargetProcessingState(target, true);
 
       // Step 3: Segment GA regions
-      console.log(`[${target}] Segmenting GA...`);
-      console.log(`[${target}] GA Segmentation Input:`, {
-        hasImageFile: !!imageAnalysis.imageFile,
-        hasDisc: !!imageAnalysis.disc,
-        hasFovea: !!imageAnalysis.fovea,
-      });
-      
       const gaResult = await api.segmentGA(imageAnalysis.imageFile, {
         disc_center_x: imageAnalysis.disc.disc_center_x,
         disc_center_y: imageAnalysis.disc.disc_center_y,
         disc_height_pixels: imageAnalysis.disc.disc_height_pixels,
         en_face_split_x: imageAnalysis.disc.en_face_split_x,
       });
-      
-      console.log(`[${target}] GA Segmentation Result:`, {
-        regionCount: gaResult.region_count,
-        hasRegions: !!gaResult.regions,
-        regionsLength: gaResult.regions?.length,
-      });
 
       // Update state using functional updater to preserve any concurrent updates
       // (e.g. registration may have updated the fovea on imageAfter)
-      setState((prev) => {
-        const stateKey = target === 'before' ? 'imageBefore' : 'imageAfter';
-        const latestImage = prev[stateKey];
-        if (!latestImage) return prev;
-
-        return {
-          ...prev,
-          [stateKey]: {
-            ...latestImage, // Uses latest state, preserves registered fovea
-            gaRegions: gaResult,
-          },
-          [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: false,
-          progression: null,
-        };
-      });
-
-      console.log(`[${target}] GA segmentation complete! User must click to select a region.`);
-    } catch (error: any) {
-      console.error(`[${target}] Error:`, error);
-      setState((prev) => ({
-        ...prev,
-        [target === 'before' ? 'isProcessingBefore' : 'isProcessingAfter']: false,
-        error: extractErrorMessage(error, `Failed to segment GA for ${target} image`),
-      }));
+      mergeTargetImageState(
+        target,
+        (latestImage) => ({
+          ...latestImage, // Uses latest state, preserves registered fovea
+          gaRegions: gaResult,
+        }),
+        { isProcessing: false, clearProgression: true }
+      );
+    } catch (error: unknown) {
+      setTargetProcessingState(
+        target,
+        false,
+        extractErrorMessage(error, `Failed to segment GA for ${target} image`)
+      );
     }
   };
 
@@ -396,25 +447,24 @@ function App() {
   /**
    * Handle fovea adjustment click
    */
-  const handleFoveaAdjust = async (target: 'before' | 'after', x: number, y: number) => {
-    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
-    const isConfirmed = target === 'before' ? foveaConfirmedBefore : foveaConfirmedAfter;
+  const handleFoveaAdjust = (target: Target, x: number, y: number) => {
+    const isConfirmed = isFoveaConfirmedForTarget(target);
 
     // Defense in depth: Block adjustment if fovea is already confirmed
     if (isConfirmed) {
-      console.log(`[${target}] Fovea adjustment blocked - already confirmed`);
       return;
     }
 
-    if (!imageAnalysis?.fovea) return;
-
     // Update fovea coordinates for the adjusted image
     setState((prev) => {
+      const imageKey = getImageKey(target);
+      const currentImage = prev[imageKey];
+      if (!currentImage?.fovea) return prev;
       const updates: Partial<AppState> = {
-        [target === 'before' ? 'imageBefore' : 'imageAfter']: {
-          ...imageAnalysis,
+        [imageKey]: {
+          ...currentImage,
           fovea: {
-            ...imageAnalysis.fovea!,
+            ...currentImage.fovea,
             fovea_x: x,
             fovea_y: y,
             detection_method: 'manual',
@@ -446,29 +496,28 @@ function App() {
   /**
    * Handle disc adjustment (drag handles)
    */
-  const handleDiscAdjust = (target: 'before' | 'after', centerX: number, topY: number, bottomY: number) => {
-    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
-    const isConfirmed = target === 'before' ? foveaConfirmedBefore : foveaConfirmedAfter;
+  const handleDiscAdjust = (target: Target, centerX: number, topY: number, bottomY: number) => {
+    const isConfirmed = isFoveaConfirmedForTarget(target);
 
     // Block adjustment if fovea is already confirmed
     if (isConfirmed) {
-      console.log(`[${target}] Disc adjustment blocked - fovea already confirmed`);
       return;
     }
 
-    if (!imageAnalysis?.disc) return;
-
     // Recalculate disc parameters
     const disc_height_pixels = bottomY - topY;
-    const pixel_to_micron_ratio = 1800 / disc_height_pixels;
+    const pixel_to_micron_ratio = OPTIC_DISC_DIAMETER_MICRONS / disc_height_pixels;
     const disc_center_y = (topY + bottomY) / 2;
 
     setState((prev) => {
+      const imageKey = getImageKey(target);
+      const currentImage = prev[imageKey];
+      if (!currentImage?.disc) return prev;
       const updates: Partial<AppState> = {
-        [target === 'before' ? 'imageBefore' : 'imageAfter']: {
-          ...imageAnalysis,
+        [imageKey]: {
+          ...currentImage,
           disc: {
-            ...imageAnalysis.disc!,
+            ...currentImage.disc,
             disc_center_x: centerX,
             disc_center_y: disc_center_y,
             disc_top_y: topY,
@@ -487,7 +536,10 @@ function App() {
 
         if (transformedTop && transformedBottom) {
           const newHeight = transformedBottom.y - transformedTop.y;
-          const newRatio = newHeight > 0 ? 1800 / newHeight : prev.imageAfter.disc.pixel_to_micron_ratio;
+          const newRatio =
+            newHeight > 0
+              ? OPTIC_DISC_DIAMETER_MICRONS / newHeight
+              : prev.imageAfter.disc.pixel_to_micron_ratio;
           const newCenterY = (transformedTop.y + transformedBottom.y) / 2;
 
           updates.imageAfter = {
@@ -521,7 +573,6 @@ function App() {
         return;
       }
 
-      console.log('[progression] Calculating...');
       const progressionResult = await api.calculateProgression({
         date_before: before.date,
         date_after: after.date,
@@ -535,10 +586,7 @@ function App() {
         ...prev,
         progression: progressionResult,
       }));
-
-      console.log('[progression] Complete!');
-    } catch (error: any) {
-      console.error('[progression] Error:', error);
+    } catch (error: unknown) {
       setState((prev) => ({
         ...prev,
         error: extractErrorMessage(error, 'Progression calculation failed'),
@@ -549,8 +597,8 @@ function App() {
   /**
    * Handle date change
    */
-  const handleDateChange = (target: 'before' | 'after', newDate: string) => {
-    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+  const handleDateChange = (target: Target, newDate: string) => {
+    const imageAnalysis = getImageAnalysis(target);
     
     if (!imageAnalysis) return;
 
@@ -560,13 +608,8 @@ function App() {
       date: newDate,
     };
 
-    setState((prev) => ({
-      ...prev,
-      [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
-      progression: null, // Clear progression to trigger recalculation
-    }));
+    setTargetImageState(target, updatedImage);
 
-    console.log(`[${target}] Date updated to ${newDate}`);
   };
 
   /**
@@ -589,7 +632,7 @@ function App() {
       region.forEach((point) => {
         const dx = x - point[0];
         const dy = y - point[1];
-        const distance = Math.sqrt(dx * dx + dy * dy);
+        const distance = Math.hypot(dx, dy);
 
         if (distance < minDistance) {
           minDistance = distance;
@@ -605,10 +648,10 @@ function App() {
    * Handle GA region selection
    */
   const handleGARegionSelect = async (
-    target: 'before' | 'after',
+    target: Target,
     regionIndex: number
   ) => {
-    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+    const imageAnalysis = getImageAnalysis(target);
     if (!imageAnalysis?.gaRegions || !imageAnalysis.disc || !imageAnalysis.fovea) {
       return;
     }
@@ -631,20 +674,11 @@ function App() {
         isManualGAPoint: false,
       };
 
-      setState((prev) => ({
-        ...prev,
-        [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
-        progression: null, // Clear to trigger recalculation
-      }));
+      setTargetImageState(target, updatedImage);
 
       // Clear any error messages
-      if (target === 'before') {
-        setGAMessageBefore(null);
-      } else {
-        setGAMessageAfter(null);
-      }
-    } catch (error: any) {
-      console.error('Error selecting GA region:', error);
+      setGAMessageForTarget(target, null);
+    } catch (error: unknown) {
       setState((prev) => ({
         ...prev,
         error: extractErrorMessage(error, 'Failed to calculate distance'),
@@ -655,8 +689,8 @@ function App() {
   /**
    * Handle GA area click (outside existing regions - triggers localized segmentation)
    */
-  const handleGAAreaClick = async (target: 'before' | 'after', x: number, y: number) => {
-    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+  const handleGAAreaClick = async (target: Target, x: number, y: number) => {
+    const imageAnalysis = getImageAnalysis(target);
     if (!imageAnalysis?.gaRegions || !imageAnalysis.disc || !imageAnalysis.fovea || !imageAnalysis.imageFile) {
       return;
     }
@@ -665,22 +699,14 @@ function App() {
     const nearest = findNearestRegion(x, y, imageAnalysis.gaRegions.regions);
     if (nearest && nearest.distance < 50) {
       // Click is close to an existing region, select it
-      console.log(`[${target}] Click near existing region ${nearest.index} (distance: ${nearest.distance.toFixed(1)}px)`);
       await handleGARegionSelect(target, nearest.index);
       return;
     }
 
     // No nearby region, try localized segmentation
     try {
-      if (target === 'before') {
-        setIsProcessingLocalGABefore(true);
-        setGAMessageBefore(null);
-      } else {
-        setIsProcessingLocalGAAfter(true);
-        setGAMessageAfter(null);
-      }
-
-      console.log(`[${target}] Attempting local segmentation at (${x.toFixed(1)}, ${y.toFixed(1)})`);
+      setLocalGAProcessingForTarget(target, true);
+      setGAMessageForTarget(target, null);
 
       const localResult = await api.segmentGALocal(
         imageAnalysis.imageFile,
@@ -693,8 +719,6 @@ function App() {
           en_face_split_x: imageAnalysis.disc.en_face_split_x,
         }
       );
-
-      console.log(`[${target}] Local segmentation result: ${localResult.region_count} regions`);
 
       if (localResult.region_count > 0) {
         // Found a region! Add it to the existing regions
@@ -721,46 +745,28 @@ function App() {
           isManualGAPoint: false,
         };
 
-        setState((prev) => ({
-          ...prev,
-          [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
-          progression: null,
-        }));
-
-        console.log(`[${target}] Local region added and selected`);
+        setTargetImageState(target, updatedImage);
       } else {
         // No region found
         const message = 'No GA detected in this area. Try clicking another spot.';
-        console.log(`[${target}] ${message}`);
-        
-        if (target === 'before') {
-          setGAMessageBefore(message);
-          setTimeout(() => setGAMessageBefore(null), 3000);
-        } else {
-          setGAMessageAfter(message);
-          setTimeout(() => setGAMessageAfter(null), 3000);
-        }
+        setGAMessageForTarget(target, message);
+        setTimeout(() => setGAMessageForTarget(target, null), 3000);
       }
-    } catch (error: any) {
-      console.error(`[${target}] Local segmentation error:`, error);
+    } catch (error: unknown) {
       setState((prev) => ({
         ...prev,
         error: extractErrorMessage(error, 'Local GA segmentation failed'),
       }));
     } finally {
-      if (target === 'before') {
-        setIsProcessingLocalGABefore(false);
-      } else {
-        setIsProcessingLocalGAAfter(false);
-      }
+      setLocalGAProcessingForTarget(target, false);
     }
   };
 
   /**
    * Handle GA retry (clear selection and let user click again)
    */
-  const handleGARetry = (target: 'before' | 'after') => {
-    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+  const handleGARetry = (target: Target) => {
+    const imageAnalysis = getImageAnalysis(target);
     if (!imageAnalysis) return;
 
     const updatedImage: ImageAnalysis = {
@@ -770,33 +776,21 @@ function App() {
       isManualGAPoint: false,
     };
 
-    setState((prev) => ({
-      ...prev,
-      [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
-      progression: null,
-    }));
+    setTargetImageState(target, updatedImage);
 
-    if (target === 'before') {
-      setManualGAModeBefore(false);
-      setGAMessageBefore(null);
-    } else {
-      setManualGAModeAfter(false);
-      setGAMessageAfter(null);
-    }
+    setManualGAModeForTarget(target, false);
+    setGAMessageForTarget(target, null);
 
-    console.log(`[${target}] GA selection cleared, user can click again`);
   };
 
   /**
    * Toggle manual GA point selection mode
    */
-  const handleManualGAModeToggle = (target: 'before' | 'after') => {
-    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+  const handleManualGAModeToggle = (target: Target) => {
+    const imageAnalysis = getImageAnalysis(target);
     if (!imageAnalysis) return;
 
-    const setManualMode =
-      target === 'before' ? setManualGAModeBefore : setManualGAModeAfter;
-    setManualMode((prev) => !prev);
+    setManualGAModeForTarget(target, (prev) => !prev);
 
     const updatedImage: ImageAnalysis = {
       ...imageAnalysis,
@@ -805,23 +799,19 @@ function App() {
       isManualGAPoint: false,
     };
 
-    setState((prev) => ({
-      ...prev,
-      [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
-      progression: null,
-    }));
+    setTargetImageState(target, updatedImage);
   };
 
   /**
    * Handle manual GA point click (distance from fovea to clicked point)
    */
-  const handleManualGAPoint = (target: 'before' | 'after', x: number, y: number) => {
-    const imageAnalysis = target === 'before' ? state.imageBefore : state.imageAfter;
+  const handleManualGAPoint = (target: Target, x: number, y: number) => {
+    const imageAnalysis = getImageAnalysis(target);
     if (!imageAnalysis?.fovea || !imageAnalysis?.disc) return;
 
     const dx = x - imageAnalysis.fovea.fovea_x;
     const dy = y - imageAnalysis.fovea.fovea_y;
-    const distancePixels = Math.sqrt(dx * dx + dy * dy);
+    const distancePixels = Math.hypot(dx, dy);
     const distanceMicrons = distancePixels * imageAnalysis.disc.pixel_to_micron_ratio;
 
     const updatedImage: ImageAnalysis = {
@@ -836,17 +826,9 @@ function App() {
       isManualGAPoint: true,
     };
 
-    setState((prev) => ({
-      ...prev,
-      [target === 'before' ? 'imageBefore' : 'imageAfter']: updatedImage,
-      progression: null,
-    }));
+    setTargetImageState(target, updatedImage);
 
-    if (target === 'before') {
-      setGAMessageBefore(null);
-    } else {
-      setGAMessageAfter(null);
-    }
+    setGAMessageForTarget(target, null);
   };
 
   /**
@@ -854,6 +836,13 @@ function App() {
    */
   const handleDownloadPDF = () => {
     alert('PDF generation will be implemented in Phase 3');
+  };
+
+  const handleUnsupportedEyeSideOverride = () => {
+    setState((prev) => ({
+      ...prev,
+      error: 'Manual eye-side override is not supported yet.',
+    }));
   };
 
   return (
@@ -889,10 +878,7 @@ function App() {
               onDateChange={(date) => handleDateChange('before', date)}
               currentDate={state.imageBefore?.date}
               eyeSide={state.imageBefore?.fovea?.eye_side}
-              onEyeSideChange={(side) => {
-                // Manual eye side override (would need API support)
-                console.log('Eye side override:', side);
-              }}
+              onEyeSideChange={handleUnsupportedEyeSideOverride}
               isProcessing={state.isProcessingBefore}
             />
             <div className="mt-4">
@@ -943,10 +929,7 @@ function App() {
               onDateChange={(date) => handleDateChange('after', date)}
               currentDate={state.imageAfter?.date}
               eyeSide={state.imageAfter?.fovea?.eye_side}
-              onEyeSideChange={(side) => {
-                // Manual eye side override (would need API support)
-                console.log('Eye side override:', side);
-              }}
+              onEyeSideChange={handleUnsupportedEyeSideOverride}
               isProcessing={state.isProcessingAfter}
             />
             <div className="mt-4">

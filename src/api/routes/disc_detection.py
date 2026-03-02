@@ -1,27 +1,17 @@
 """Optic disc detection endpoint."""
-from fastapi import APIRouter, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
-import numpy as np
-import cv2
-from typing import Dict
+from fastapi import APIRouter, File, UploadFile
 
-from ..services.disc_detector import DiscDetectorService
-from ..models.schemas import DiscDetectionResponse
+from ..dependencies import get_disc_detector
+from ..models.schemas import DiscDetectionResponse, DiscDetectorStatusResponse
+from ..utils.errors import route_error_handler
+from ..utils.status import build_status_payload
+from ..utils.uploads import decode_uploaded_image
 
 router = APIRouter()
 
-# Initialize service (singleton pattern)
-disc_detector = None
-
-def get_disc_detector() -> DiscDetectorService:
-    """Get or initialize the disc detector service (singleton)."""
-    global disc_detector
-    if disc_detector is None:
-        disc_detector = DiscDetectorService()
-    return disc_detector
-
 @router.post("/detect-disc", response_model=DiscDetectionResponse)
-async def detect_optic_disc(file: UploadFile = File(...)) -> Dict:
+@route_error_handler("Disc detection")
+async def detect_optic_disc(file: UploadFile = File(...)) -> DiscDetectionResponse:
     """
     Detect optic disc in an uploaded OCT image.
     
@@ -38,39 +28,17 @@ async def detect_optic_disc(file: UploadFile = File(...)) -> Dict:
     Raises:
         HTTPException: If image processing fails
     """
-    try:
-        # Read uploaded file
-        contents = await file.read()
-        
-        # Convert to numpy array
-        nparr = np.frombuffer(contents, np.uint8)
-        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        if image is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid image file. Could not decode image."
-            )
-        
-        # Get disc detector service
-        detector = get_disc_detector()
-        
-        # Perform detection
-        result = detector.detect_from_image(image)
-        
-        return result
-    
-    except HTTPException:
-        raise
-    
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Disc detection failed: {str(e)}"
-        )
+    image = await decode_uploaded_image(file, file_role="image")
 
-@router.get("/disc-detector/status")
-async def get_disc_detector_status():
+    # Get disc detector service
+    detector = get_disc_detector()
+
+    # Perform detection
+    result = detector.detect_from_image(image, image_name=file.filename)
+    return DiscDetectionResponse(**result)
+
+@router.get("/disc-detector/status", response_model=DiscDetectorStatusResponse)
+async def get_disc_detector_status() -> DiscDetectorStatusResponse:
     """
     Check if the disc detector service is initialized.
     
@@ -78,9 +46,11 @@ async def get_disc_detector_status():
         Status information about the disc detector service
     """
     detector = get_disc_detector()
-    return {
-        "status": "ready",
-        "model_path": detector.model_path,
-        "device": str(detector.device),
-        "img_size": detector.img_size
-    }
+    return DiscDetectorStatusResponse(
+        **build_status_payload(
+            "ready",
+            model_path=detector.model_path,
+            device=str(detector.device),
+            img_size=detector.img_size,
+        )
+    )

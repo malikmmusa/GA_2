@@ -2,7 +2,7 @@
  * ImageUpload Component
  * Handles file upload, date selection, and eye side selector
  */
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 interface ImageUploadProps {
   title: string;
@@ -30,6 +30,12 @@ export const ImageUpload: React.FC<ImageUploadProps> = ({
     currentDate || new Date().toISOString().split('T')[0]
   );
 
+  useEffect(() => {
+    if (currentDate) {
+      setSelectedDate(currentDate);
+    }
+  }, [currentDate]);
+
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -53,6 +59,10 @@ export const ImageUpload: React.FC<ImageUploadProps> = ({
   const handleFileSelection = (file: File) => {
     if (!file.type.startsWith('image/')) {
       alert('Please select an image file');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      alert('Please select an image under 10MB');
       return;
     }
 

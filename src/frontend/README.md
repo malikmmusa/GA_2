@@ -6,13 +6,16 @@ React + TypeScript + Vite frontend for the Atrophy Advisor OCT analysis applicat
 
 ```bash
 # Install dependencies
-npm install
+npm ci
 
 # Start development server
 npm run dev
 
 # Build for production
 npm run build
+
+# Run lint checks
+npm run lint
 
 # Preview production build
 npm run preview

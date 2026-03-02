@@ -1,16 +1,18 @@
 """Main FastAPI application entry point for Atrophy Advisor."""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 import uvicorn
 
-from .routes import disc_detection, fovea_detection, ga_segmentation, calculations, registration
+from .constants import API_VERSION
+from .models.schemas import HealthStatusResponse, RootStatusResponse
+from .routes import calculations, disc_detection, fovea_detection, ga_segmentation, registration
+from .utils.status import build_status_payload
 
 # Initialize FastAPI app
 app = FastAPI(
     title="Atrophy Advisor API",
     description="OCT image analysis for Geographic Atrophy progression tracking",
-    version="1.0.0",
+    version=API_VERSION,
     docs_url="/docs",
     redoc_url="/redoc"
 )
@@ -24,51 +26,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(
-    disc_detection.router,
-    prefix="/api",
-    tags=["Disc Detection"]
+ROUTERS = (
+    (disc_detection.router, "Disc Detection"),
+    (fovea_detection.router, "Fovea Detection"),
+    (ga_segmentation.router, "GA Segmentation"),
+    (calculations.router, "Calculations"),
+    (registration.router, "Registration"),
 )
 
-app.include_router(
-    fovea_detection.router,
-    prefix="/api",
-    tags=["Fovea Detection"]
-)
+for router, tag in ROUTERS:
+    app.include_router(router, prefix="/api", tags=[tag])
 
-app.include_router(
-    ga_segmentation.router,
-    prefix="/api",
-    tags=["GA Segmentation"]
-)
-
-app.include_router(
-    calculations.router,
-    prefix="/api",
-    tags=["Calculations"]
-)
-
-app.include_router(
-    registration.router,
-    prefix="/api",
-    tags=["Registration"]
-)
-
-@app.get("/")
-async def root():
+@app.get("/", response_model=RootStatusResponse)
+async def root() -> RootStatusResponse:
     """Root endpoint with API information."""
-    return {
-        "message": "Atrophy Advisor API",
-        "version": "1.0.0",
-        "docs": "/docs",
-        "status": "operational"
-    }
+    return RootStatusResponse(
+        **build_status_payload(
+            "operational",
+            message="Atrophy Advisor API",
+            version=API_VERSION,
+            docs="/docs",
+        )
+    )
 
-@app.get("/health")
-async def health_check():
+@app.get("/health", response_model=HealthStatusResponse)
+async def health_check() -> HealthStatusResponse:
     """Health check endpoint."""
-    return {"status": "healthy"}
+    return HealthStatusResponse(**build_status_payload("healthy"))
 
 if __name__ == "__main__":
     uvicorn.run(

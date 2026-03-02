@@ -3,6 +3,10 @@ import cv2
 import numpy as np
 from typing import Tuple, Optional, Dict
 
+from ..utils.logger import get_logger
+
+logger = get_logger("services.image_registrar")
+
 
 class ImageRegistrarService:
     """
@@ -99,18 +103,18 @@ class ImageRegistrarService:
         kp_new, des_new = self.orb.detectAndCompute(enhanced_new, None)
         
         if des_ref is None or des_new is None:
-            print("[Registration] No descriptors found in one or both images")
+            logger.warning("No descriptors found in one or both images")
             return np.array([]), np.array([]), 0
         
         if len(kp_ref) < 4 or len(kp_new) < 4:
-            print(f"[Registration] Not enough keypoints: ref={len(kp_ref)}, new={len(kp_new)}")
+            logger.warning("Not enough keypoints: ref=%s, new=%s", len(kp_ref), len(kp_new))
             return np.array([]), np.array([]), 0
         
         # Match descriptors using kNN (k=2 for ratio test)
         try:
             matches = self.matcher.knnMatch(des_ref, des_new, k=2)
         except cv2.error as e:
-            print(f"[Registration] Matching failed: {e}")
+            logger.error("Matching failed: %s", e)
             return np.array([]), np.array([]), 0
         
         # Apply Lowe's ratio test
@@ -121,10 +125,14 @@ class ImageRegistrarService:
                 if m.distance < self.ratio_test_threshold * n.distance:
                     good_matches.append(m)
         
-        print(f"[Registration] Total matches: {len(matches)}, Good matches after ratio test: {len(good_matches)}")
+        logger.debug(
+            "Total matches: %s, good matches after ratio test: %s",
+            len(matches),
+            len(good_matches),
+        )
         
         if len(good_matches) < 4:
-            print("[Registration] Not enough good matches (need >= 4)")
+            logger.warning("Not enough good matches (need >= 4)")
             return np.array([]), np.array([]), 0
         
         # Extract matched point coordinates
@@ -165,11 +173,11 @@ class ImageRegistrarService:
         )
         
         if matrix is None:
-            print("[Registration] RANSAC failed to find a transform")
+            logger.warning("RANSAC failed to find a transform")
             return None, 0
         
         num_inliers = np.sum(inliers) if inliers is not None else 0
-        print(f"[Registration] RANSAC: {num_inliers} inliers out of {len(src_pts)} matches")
+        logger.debug("RANSAC: %s inliers out of %s matches", num_inliers, len(src_pts))
         
         return matrix, int(num_inliers)
     
@@ -251,9 +259,23 @@ class ImageRegistrarService:
             status: "success", "low_confidence", or "failed"
             message: Human-readable status message
         """
+        if not (0 <= en_face_split_x_ref < img_ref.shape[1]) or not (
+            0 <= en_face_split_x_new < img_new.shape[1]
+        ):
+            return (
+                None,
+                0.0,
+                0,
+                0,
+                "failed",
+                "Invalid en-face split coordinates for one or both images",
+            )
+
         # Extract en-face regions
         en_face_ref = img_ref[:, en_face_split_x_ref:]
         en_face_new = img_new[:, en_face_split_x_new:]
+        if en_face_ref.size == 0 or en_face_new.size == 0:
+            return None, 0.0, 0, 0, "failed", "Unable to extract en-face regions from one or both images"
         
         # Convert to grayscale
         if len(en_face_ref.shape) == 3:
@@ -266,7 +288,7 @@ class ImageRegistrarService:
         else:
             gray_new = en_face_new
         
-        print(f"[Registration] En-face shapes: ref={gray_ref.shape}, new={gray_new.shape}")
+        logger.debug("En-face shapes: ref=%s, new=%s", gray_ref.shape, gray_new.shape)
         
         # Detect and match keypoints
         src_pts, dst_pts, num_good_matches = self._detect_and_match(gray_ref, gray_new)
