@@ -4,7 +4,10 @@ from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
-import torch  # required for device detection (mps/cuda) and SAM2 internals
+try:
+    import torch  # required for device detection (mps/cuda) and SAM2 internals
+except Exception:  # pragma: no cover - optional dependency in test/dev environments
+    torch = None
 
 try:
     from sam2.build_sam import build_sam2
@@ -17,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 
 def _select_device() -> str:
+    if torch is None:
+        return "cpu"
     if torch.backends.mps.is_available():
         return "mps"
     if torch.cuda.is_available():

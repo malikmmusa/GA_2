@@ -1,5 +1,5 @@
 """GA Segmentation Service - Single-cluster selection with texture validation"""
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -59,6 +59,13 @@ class GASegmenterService:
         self.morph_kernel_size = morph_kernel_size
         self.use_sam = use_sam
         self._sam = SAMRefiner() if use_sam else None
+        # Keep top-N bright clusters to reduce failure when true GA is not brightest.
+        self.top_cluster_count = min(max(1, n_clusters), 2)
+        # Guardrails to suppress giant/border-connected false positives.
+        self.max_bbox_fraction = 0.65
+        self.max_region_fraction = 0.45
+        self.border_margin_px = 3
+        self.border_reject_area_fraction = 0.025
     
     def _apply_clahe(self, gray: np.ndarray) -> np.ndarray:
         """
@@ -194,6 +201,32 @@ class GASegmenterService:
             score *= (0.7 + 0.3 * fovea_score)
         
         return score
+
+    def _extract_cluster_contours(
+        self,
+        labels: np.ndarray,
+        cluster_idx: int
+    ) -> List[np.ndarray]:
+        """Build cleaned contours for one cluster index."""
+        h, w = labels.shape
+        lesion_mask = (labels == cluster_idx).astype(np.uint8) * 255
+
+        kernel = np.ones((self.morph_kernel_size, self.morph_kernel_size), np.uint8)
+        clean_mask = cv2.morphologyEx(lesion_mask, cv2.MORPH_OPEN, kernel)
+        clean_mask = cv2.morphologyEx(clean_mask, cv2.MORPH_CLOSE, kernel)
+
+        temp_contours, _ = cv2.findContours(clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        max_area = max([cv2.contourArea(c) for c in temp_contours]) if temp_contours else 0
+        image_area = h * w
+        if max_area > 0.15 * image_area:
+            clean_mask = self._apply_watershed_splitting(clean_mask)
+
+        contours, _ = cv2.findContours(
+            clean_mask,
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
+        return contours
     
     def segment_ga_regions(
         self,
@@ -294,51 +327,40 @@ class GASegmenterService:
         centers_flat = centers.flatten()
         ranked_indices = np.argsort(centers_flat)[::-1]  # Descending intensity
         
-        # Select the brightest cluster (baseline approach that worked best)
-        selected_cluster = ranked_indices[0]
-        
-        # Create lesion mask from selected single cluster
-        lesion_mask = (labels == selected_cluster).astype(np.uint8) * 255
-        
-        # Morphological Cleanup
-        kernel = np.ones((self.morph_kernel_size, self.morph_kernel_size), np.uint8)
-        clean_mask = cv2.morphologyEx(lesion_mask, cv2.MORPH_OPEN, kernel)
-        clean_mask = cv2.morphologyEx(clean_mask, cv2.MORPH_CLOSE, kernel)
-        
-        # Apply watershed splitting only to large blobs (> 15% of image)
-        temp_contours, _ = cv2.findContours(clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        max_area = max([cv2.contourArea(c) for c in temp_contours]) if temp_contours else 0
-        image_area = h * w
-        
-        if max_area > 0.15 * image_area:
-            clean_mask = self._apply_watershed_splitting(clean_mask)
-        
-        # Find Contours
-        contours, _ = cv2.findContours(
-            clean_mask,
-            cv2.RETR_EXTERNAL,
-            cv2.CHAIN_APPROX_SIMPLE
-        )
-        
-        if not contours:
+        # Keep top bright clusters as candidates (mitigates cluster-mismatch failures).
+        selected_clusters = ranked_indices[:min(self.top_cluster_count, len(ranked_indices))]
+        cluster_rank_map: Dict[int, int] = {
+            int(cluster_id): int(rank)
+            for rank, cluster_id in enumerate(ranked_indices)
+        }
+
+        contour_records: List[Tuple[np.ndarray, int]] = []
+        for cluster_idx in selected_clusters:
+            contours = self._extract_cluster_contours(labels, int(cluster_idx))
+            for cnt in contours:
+                contour_records.append((cnt, int(cluster_idx)))
+
+        if not contour_records:
             return []
 
         if self.use_sam and self._sam is not None and self._sam.available:
             boxes = []
-            for cnt in contours:
+            for cnt, _ in contour_records:
                 x, y, w_box, h_box = cv2.boundingRect(cnt)
                 boxes.append(np.array([x, y, x + w_box, y + h_box]))
             en_face_rgb = cv2.cvtColor(en_face, cv2.COLOR_BGR2RGB) if len(en_face.shape) == 3 else en_face
             self._sam.set_image(en_face_rgb)
             sam_results = self._sam.refine_candidates(boxes)
             if sam_results:
-                contours = [r["contour"] for r in sam_results]
+                contour_records = [(r["contour"], -1) for r in sam_results]
 
         # Filter and score contours
         candidates = []
-        
+        image_area = float(h * w)
+        image_diagonal = float(np.sqrt(h**2 + w**2))
         fovea_local = (fovea_x_local, fovea_y_local) if fovea_x_local is not None and fovea_y_local is not None else None
-        for cnt in contours:
+
+        for cnt, cluster_idx in contour_records:
             area = cv2.contourArea(cnt)
             
             # 1. Size Filter
@@ -353,38 +375,99 @@ class GASegmenterService:
             if circularity > self.max_circularity:
                 continue
             
-            # 3. Border Filter - DISABLED (as in baseline)
-            # The plan mentioned re-enabling it, but baseline didn't have it
-            # x, y, w_box, h_box = cv2.boundingRect(cnt)
-            # box_area = w_box * h_box
-            # if box_area > 0.7 * (w * h):
-            #     continue
+            # 3. Border/giant-blob filter
+            x, y, w_box, h_box = cv2.boundingRect(cnt)
+            box_area = float(w_box * h_box)
+            if box_area > self.max_bbox_fraction * image_area:
+                continue
+            if area > self.max_region_fraction * image_area:
+                continue
+
+            touch_count = 0
+            if x <= self.border_margin_px:
+                touch_count += 1
+            if y <= self.border_margin_px:
+                touch_count += 1
+            if (x + w_box) >= (w - self.border_margin_px):
+                touch_count += 1
+            if (y + h_box) >= (h - self.border_margin_px):
+                touch_count += 1
+            if touch_count >= 2 and area > self.border_reject_area_fraction * image_area:
+                continue
             
             # 4. Anatomy-aware scoring
             anatomy_score = self._score_region_anatomy_aware(
                 cnt, gray.shape, fovea_local
             )
-            
+
+            rank = cluster_rank_map.get(cluster_idx, 0)
+            intensity_prior = max(0.70, 1.0 - 0.15 * rank)
+            selection_score = anatomy_score * intensity_prior
+
+            if fovea_local is not None:
+                signed_dist = cv2.pointPolygonTest(
+                    cnt, (float(fovea_local[0]), float(fovea_local[1])), True
+                )
+                boundary_dist = abs(float(signed_dist))
+                normalized_dist = boundary_dist / max(image_diagonal, 1e-6)
+                contains_fovea = signed_dist >= 0
+
+                # Prefer clinically plausible boundary distance from fovea.
+                if contains_fovea:
+                    fovea_edge_score = 0.0
+                elif normalized_dist < 0.012:
+                    fovea_edge_score = 0.2
+                elif normalized_dist <= 0.14:
+                    fovea_edge_score = 1.0
+                elif normalized_dist <= 0.40:
+                    fovea_edge_score = max(0.1, 1.0 - (normalized_dist - 0.14) / 0.26)
+                else:
+                    fovea_edge_score = 0.1
+
+                target_dist_norm = 0.10
+                distance_alignment = max(
+                    0.0,
+                    1.0 - abs(normalized_dist - target_dist_norm) / 0.25
+                )
+                selection_score = (
+                    (0.50 * anatomy_score)
+                    + (0.35 * fovea_edge_score)
+                    + (0.15 * distance_alignment)
+                ) * intensity_prior
+
+                # Contours enclosing the fovea are usually anatomically implausible for GA target.
+                if contains_fovea and area > 0.01 * image_area:
+                    selection_score *= 0.4
+            else:
+                boundary_dist = float("nan")
+
             # Store with score
-            candidates.append((cnt, area, anatomy_score))
+            candidates.append((cnt, area, selection_score, boundary_dist))
         
         if not candidates:
             return []
         
-        # Sort by anatomy score first, then by area
+        # Sort by composite score first, then area.
         candidates.sort(key=lambda x: (x[2], x[1]), reverse=True)
         
         # Size-based filtering (relative to largest)
         largest_area = candidates[0][1]
         threshold_area = self.relative_area_threshold * largest_area
+        # Avoid over-pruning clinically plausible smaller lesions when a giant contour dominates.
+        if fovea_local is not None:
+            threshold_area = min(threshold_area, 0.02 * image_area)
         
-        final_candidates = [(c, a, s) for c, a, s in candidates if a >= threshold_area]
+        final_candidates = [(c, a, s, d) for c, a, s, d in candidates if a >= threshold_area]
+        if fovea_local is not None:
+            final_candidates = [(c, a, s, d) for c, a, s, d in final_candidates if s >= 0.15]
+            if not final_candidates:
+                final_candidates = [candidates[0]]
         
         # Apply max_regions limit if specified
         if self.max_regions is not None:
             final_candidates = final_candidates[:self.max_regions]
         
-        final_contours = [c for c, _, _ in final_candidates]
+        final_contours = [c for c, _, _, _ in final_candidates]
         
         # Adjust contours back to original image coordinates if needed
         if en_face_split_x is not None:

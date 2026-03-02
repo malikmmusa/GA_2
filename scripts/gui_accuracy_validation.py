@@ -476,6 +476,121 @@ def export_side_by_side(
     cv2.imwrite(str(out_path), combined)
 
 
+def _detect_gui_predicted_ga_point(
+    gui_canvas_bgr: np.ndarray,
+    meta: ImageMeta,
+) -> Optional[Tuple[float, float, float]]:
+    """
+    Estimate GUI-selected GA endpoint from cyan contour pixels.
+
+    Returns:
+        (pred_x_orig, pred_y_orig, cyan_coverage_ratio) in original image coordinates.
+        None when detection is not possible.
+    """
+    if meta.fovea_xy is None:
+        return None
+
+    gui_h, gui_w = gui_canvas_bgr.shape[:2]
+    if gui_h <= 0 or gui_w <= 0:
+        return None
+
+    scale_x = gui_w / float(max(1, meta.width))
+    scale_y = gui_h / float(max(1, meta.height))
+    split_gui = int(round(meta.split_x * scale_x))
+    split_gui = int(np.clip(split_gui, 1, gui_w - 1))
+
+    gui_enface = gui_canvas_bgr[:, split_gui:]
+    ef_h, ef_w = gui_enface.shape[:2]
+    if ef_h <= 0 or ef_w <= 0:
+        return None
+
+    enface_width_orig = max(1, meta.width - meta.split_x)
+    fovea_local_x = float(meta.fovea_xy[0] - meta.split_x)
+    fovea_local_y = float(meta.fovea_xy[1])
+    fovea_gui_x = fovea_local_x * (ef_w / float(enface_width_orig))
+    fovea_gui_y = fovea_local_y * scale_y
+
+    hsv = cv2.cvtColor(gui_enface, cv2.COLOR_BGR2HSV)
+    cyan_mask = cv2.inRange(
+        hsv,
+        np.array([75, 70, 70], dtype=np.uint8),
+        np.array([105, 255, 255], dtype=np.uint8),
+    )
+    cyan_mask = cv2.morphologyEx(cyan_mask, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+
+    ys, xs = np.where(cyan_mask > 0)
+    if len(xs) == 0:
+        return None
+
+    d2 = (xs - fovea_gui_x) ** 2 + (ys - fovea_gui_y) ** 2
+    nearest_idx = int(np.argmin(d2))
+    pred_gui_x = float(xs[nearest_idx])
+    pred_gui_y = float(ys[nearest_idx])
+
+    pred_local_x = pred_gui_x * (enface_width_orig / float(max(1, ef_w)))
+    pred_local_y = pred_gui_y * (meta.height / float(max(1, gui_h)))
+    pred_x_orig = float(meta.split_x + pred_local_x)
+    pred_y_orig = float(pred_local_y)
+    coverage_ratio = float(np.sum(cyan_mask > 0) / float(max(1, ef_h * ef_w)))
+
+    return pred_x_orig, pred_y_orig, coverage_ratio
+
+
+def compute_gui_error_metrics(
+    gui_canvas_bgr: np.ndarray,
+    meta: ImageMeta,
+) -> Dict[str, str]:
+    """
+    Compute validation metrics from GUI canvas versus raw-marked target.
+
+    Output fields are string-typed for direct CSV serialization.
+    """
+    metrics: Dict[str, str] = {
+        "prediction_detected": "no",
+        "pred_ga_x": "",
+        "pred_ga_y": "",
+        "gt_ga_x": "",
+        "gt_ga_y": "",
+        "point_error_px": "",
+        "gt_distance_px": "",
+        "pred_distance_px": "",
+        "distance_error_px": "",
+        "cyan_coverage_ratio": "",
+    }
+
+    if meta.fovea_xy is None or meta.ga_target_xy is None:
+        return metrics
+
+    pred = _detect_gui_predicted_ga_point(gui_canvas_bgr, meta)
+    if pred is None:
+        return metrics
+
+    pred_x, pred_y, cyan_ratio = pred
+    gt_x, gt_y = float(meta.ga_target_xy[0]), float(meta.ga_target_xy[1])
+    fovea_x, fovea_y = float(meta.fovea_xy[0]), float(meta.fovea_xy[1])
+
+    point_error_px = float(np.hypot(pred_x - gt_x, pred_y - gt_y))
+    gt_distance_px = float(np.hypot(gt_x - fovea_x, gt_y - fovea_y))
+    pred_distance_px = float(np.hypot(pred_x - fovea_x, pred_y - fovea_y))
+    distance_error_px = float(abs(pred_distance_px - gt_distance_px))
+
+    metrics.update(
+        {
+            "prediction_detected": "yes",
+            "pred_ga_x": f"{pred_x:.2f}",
+            "pred_ga_y": f"{pred_y:.2f}",
+            "gt_ga_x": f"{gt_x:.2f}",
+            "gt_ga_y": f"{gt_y:.2f}",
+            "point_error_px": f"{point_error_px:.2f}",
+            "gt_distance_px": f"{gt_distance_px:.2f}",
+            "pred_distance_px": f"{pred_distance_px:.2f}",
+            "distance_error_px": f"{distance_error_px:.2f}",
+            "cyan_coverage_ratio": f"{cyan_ratio:.5f}",
+        }
+    )
+    return metrics
+
+
 def wait_for_button(page: Page, name: str, timeout_ms: float = 120000) -> Locator:
     locator = page.get_by_role("button", name=name)
     locator.wait_for(state="visible", timeout=timeout_ms)
@@ -622,6 +737,7 @@ def process_case(page: Page, case: Case, meta: Dict[str, ImageMeta], output_dir:
     if before_selected:
         before_out = output_dir / f"{Path(before.filename).stem}_enface_comparison.png"
         export_side_by_side(before_canvas_img, before, before_out)
+        before_metrics = compute_gui_error_metrics(before_canvas_img, before)
         rows.append(
             {
                 "case_key": case.key,
@@ -629,14 +745,7 @@ def process_case(page: Page, case: Case, meta: Dict[str, ImageMeta], output_dir:
                 "pair_mode": "single" if is_single else "paired_before",
                 "raw_marked_exists": "yes" if before.raw_path else "no",
                 "output_file": str(before_out.relative_to(PROJECT_ROOT)),
-                "prediction_detected": "",
-                "point_error_px": "",
-                "distance_error_px": "",
-                "cyan_coverage_ratio": "",
-                "pred_ga_x": "",
-                "pred_ga_y": "",
-                "gt_ga_x": str(before.ga_target_xy[0]) if before.ga_target_xy else "",
-                "gt_ga_y": str(before.ga_target_xy[1]) if before.ga_target_xy else "",
+                **before_metrics,
             }
         )
 
@@ -644,6 +753,7 @@ def process_case(page: Page, case: Case, meta: Dict[str, ImageMeta], output_dir:
         after_out = output_dir / f"{Path(case.after_filename).stem}_enface_comparison.png"
         export_side_by_side(after_canvas_img, meta[case.after_filename], after_out)
         after_meta = meta[case.after_filename]
+        after_metrics = compute_gui_error_metrics(after_canvas_img, after_meta)
         rows.append(
             {
                 "case_key": case.key,
@@ -651,14 +761,7 @@ def process_case(page: Page, case: Case, meta: Dict[str, ImageMeta], output_dir:
                 "pair_mode": "paired_after",
                 "raw_marked_exists": "yes" if after_meta.raw_path else "no",
                 "output_file": str(after_out.relative_to(PROJECT_ROOT)),
-                "prediction_detected": "",
-                "point_error_px": "",
-                "distance_error_px": "",
-                "cyan_coverage_ratio": "",
-                "pred_ga_x": "",
-                "pred_ga_y": "",
-                "gt_ga_x": str(after_meta.ga_target_xy[0]) if after_meta.ga_target_xy else "",
-                "gt_ga_y": str(after_meta.ga_target_xy[1]) if after_meta.ga_target_xy else "",
+                **after_metrics,
             }
         )
 
@@ -672,13 +775,15 @@ SUMMARY_FIELDS = [
     "raw_marked_exists",
     "output_file",
     "prediction_detected",
-    "point_error_px",
-    "distance_error_px",
-    "cyan_coverage_ratio",
     "pred_ga_x",
     "pred_ga_y",
     "gt_ga_x",
     "gt_ga_y",
+    "point_error_px",
+    "gt_distance_px",
+    "pred_distance_px",
+    "distance_error_px",
+    "cyan_coverage_ratio",
 ]
 
 
