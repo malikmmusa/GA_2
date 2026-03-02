@@ -37,6 +37,23 @@ python -m pip install --upgrade pip setuptools wheel
 echo "Installing requirements..."
 python -m pip install -r requirements.txt
 
+# Install frontend dependencies for GUI validation scripts
+if [ -f "src/frontend/package.json" ]; then
+    echo "Installing frontend dependencies..."
+    npm --prefix src/frontend install
+fi
+
+# Install Playwright browser runtime (best-effort)
+if python - <<'PY'
+import importlib.util
+import sys
+sys.exit(0 if importlib.util.find_spec("playwright") else 1)
+PY
+then
+    echo "Installing Playwright Chromium browser..."
+    python -m playwright install chromium || echo "⚠️ Playwright browser install failed (continuing)."
+fi
+
 echo ""
 echo "=========================================="
 echo "Setup complete!"

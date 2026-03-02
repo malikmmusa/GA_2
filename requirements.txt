@@ -22,10 +22,14 @@ fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 python-multipart>=0.0.6
 
+# Test & validation tooling
+pytest>=8.0.0
+playwright>=1.40.0
+httpx>=0.27.0
+
 # PDF Generation
 reportlab>=4.0.0
 
 # Segmentation - SAM2 (Segment Anything Model 2, Meta)
-# Not on PyPI - install from GitHub:
+# Optional for GA refinement. Install manually if desired:
 #   pip install git+https://github.com/facebookresearch/sam2.git
-SAM-2>=1.0

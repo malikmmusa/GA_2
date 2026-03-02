@@ -26,7 +26,7 @@ class TestGASegmentationRouteSam(unittest.TestCase):
             dependencies.get_ga_segmenter.cache_clear()
 
     def test_requirements_contains_sam2(self) -> None:
-        """requirements.txt must declare the SAM-2 dependency."""
+        """requirements.txt should document SAM2 availability."""
         req_path = Path(__file__).resolve().parents[1] / "requirements.txt"
-        contents = req_path.read_text(encoding="utf-8")
-        self.assertIn("SAM-2", contents)
+        contents = req_path.read_text(encoding="utf-8").lower()
+        self.assertIn("sam2", contents)

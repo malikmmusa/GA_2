@@ -1,20 +1,29 @@
 import os
 from pathlib import Path
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 import albumentations as A
 import cv2
 import numpy as np
-import torch
-from albumentations.pytorch import ToTensorV2
+try:
+    import torch
+except Exception:  # pragma: no cover - optional in lightweight environments
+    torch = None
 
-from src.models.retfound_unet import RETFound_UNet
+try:
+    from albumentations.pytorch import ToTensorV2
+except Exception:  # pragma: no cover - requires torch
+    ToTensorV2 = None
+
 from src.utils.image_utils import get_split_indices_and_images
 
 from ..constants import DISC_DIAMETER_MICRONS
 from ..utils.logger import get_logger
 
 logger = get_logger("services.disc_detector")
+
+if TYPE_CHECKING:
+    from src.models.retfound_unet import RETFound_UNet
 
 
 class DiscDetectorService:
@@ -42,32 +51,42 @@ class DiscDetectorService:
         
         # Auto-detect device
         if device is None:
-            if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            if torch is None:
+                self.device = "cpu"
+            elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
                 self.device = torch.device('mps')
             elif torch.cuda.is_available():
                 self.device = torch.device('cuda')
             else:
                 self.device = torch.device('cpu')
         else:
-            self.device = torch.device(device)
+            self.device = torch.device(device) if torch is not None else "cpu"
         
         # Load model
         self.model = self._load_model()
         
-        # Define preprocessing transform
-        self.transform = A.Compose([
-            A.Resize(self.img_size, self.img_size),
-            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            ToTensorV2()
-        ])
+        # Define preprocessing transform only for model inference mode.
+        self.transform = None
+        if self.model is not None and ToTensorV2 is not None:
+            self.transform = A.Compose([
+                A.Resize(self.img_size, self.img_size),
+                A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+                ToTensorV2()
+            ])
     
-    def _load_model(self) -> Optional[RETFound_UNet]:
+    def _load_model(self) -> Optional["RETFound_UNet"]:
         """Load the RETFound U-Net model with trained weights."""
+        if torch is None:
+            logger.warning("Torch is not installed. Using fallback mode.")
+            return None
+
         if not os.path.exists(self.model_path):
             logger.warning("Model weights not found at %s. Using fallback mode.", self.model_path)
             return None
 
         try:
+            from src.models.retfound_unet import RETFound_UNet
+
             logger.info("Loading model from %s...", self.model_path)
             model = RETFound_UNet(
                 img_size=self.img_size,
@@ -218,7 +237,7 @@ class DiscDetectorService:
             divider_safety_margin=10
         )
 
-        if self.model is None:
+        if self.model is None or self.transform is None:
             return self._fallback_detect_from_marked_or_heuristic(
                 image=image,
                 image_name=image_name,
