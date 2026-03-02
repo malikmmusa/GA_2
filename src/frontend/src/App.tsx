@@ -398,6 +398,8 @@ function App() {
         disc_center_y: imageAnalysis.disc.disc_center_y,
         disc_height_pixels: imageAnalysis.disc.disc_height_pixels,
         en_face_split_x: imageAnalysis.disc.en_face_split_x,
+        fovea_x: imageAnalysis.fovea.fovea_x,
+        fovea_y: imageAnalysis.fovea.fovea_y,
       });
 
       // Update state using functional updater to preserve any concurrent updates
