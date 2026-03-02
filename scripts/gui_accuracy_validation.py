@@ -629,28 +629,62 @@ def process_case(page: Page, case: Case, meta: Dict[str, ImageMeta], output_dir:
                 "pair_mode": "single" if is_single else "paired_before",
                 "raw_marked_exists": "yes" if before.raw_path else "no",
                 "output_file": str(before_out.relative_to(PROJECT_ROOT)),
+                "prediction_detected": "",
+                "point_error_px": "",
+                "distance_error_px": "",
+                "cyan_coverage_ratio": "",
+                "pred_ga_x": "",
+                "pred_ga_y": "",
+                "gt_ga_x": str(before.ga_target_xy[0]) if before.ga_target_xy else "",
+                "gt_ga_y": str(before.ga_target_xy[1]) if before.ga_target_xy else "",
             }
         )
 
     if (not is_single) and case.after_filename is not None and after_selected:
         after_out = output_dir / f"{Path(case.after_filename).stem}_enface_comparison.png"
         export_side_by_side(after_canvas_img, meta[case.after_filename], after_out)
+        after_meta = meta[case.after_filename]
         rows.append(
             {
                 "case_key": case.key,
                 "image_filename": case.after_filename,
                 "pair_mode": "paired_after",
-                "raw_marked_exists": "yes" if meta[case.after_filename].raw_path else "no",
+                "raw_marked_exists": "yes" if after_meta.raw_path else "no",
                 "output_file": str(after_out.relative_to(PROJECT_ROOT)),
+                "prediction_detected": "",
+                "point_error_px": "",
+                "distance_error_px": "",
+                "cyan_coverage_ratio": "",
+                "pred_ga_x": "",
+                "pred_ga_y": "",
+                "gt_ga_x": str(after_meta.ga_target_xy[0]) if after_meta.ga_target_xy else "",
+                "gt_ga_y": str(after_meta.ga_target_xy[1]) if after_meta.ga_target_xy else "",
             }
         )
 
     return rows
 
 
+SUMMARY_FIELDS = [
+    "case_key",
+    "image_filename",
+    "pair_mode",
+    "raw_marked_exists",
+    "output_file",
+    "prediction_detected",
+    "point_error_px",
+    "distance_error_px",
+    "cyan_coverage_ratio",
+    "pred_ga_x",
+    "pred_ga_y",
+    "gt_ga_x",
+    "gt_ga_y",
+]
+
+
 def write_summary(output_dir: Path, rows: List[Dict[str, str]]) -> None:
     summary_path = output_dir / "summary.csv"
-    fieldnames = ["case_key", "image_filename", "pair_mode", "raw_marked_exists", "output_file"]
+    fieldnames = list(SUMMARY_FIELDS)
     merged: Dict[str, Dict[str, str]] = {}
 
     if summary_path.exists():
@@ -662,12 +696,15 @@ def write_summary(output_dir: Path, rows: List[Dict[str, str]]) -> None:
                     merged[key] = {k: row.get(k, "") for k in fieldnames}
 
     for row in rows:
+        base = merged.get(row["image_filename"], {})
+        for k in fieldnames:
+            row[k] = row.get(k, base.get(k, ""))
         merged[row["image_filename"]] = row
 
     ordered_rows = sorted(merged.values(), key=lambda r: (r["case_key"], r["image_filename"]))
 
     with open(summary_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         for row in ordered_rows:
             writer.writerow(row)
