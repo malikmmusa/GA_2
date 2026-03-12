@@ -1,4 +1,5 @@
 import os
+import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, Optional
 
@@ -74,6 +75,29 @@ class DiscDetectorService:
                 ToTensorV2()
             ])
     
+    def _download_weights(self, url: str) -> bool:
+        """Download model weights from a URL, streaming to disk."""
+        dest = Path(self.model_path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = dest.with_suffix(".tmp")
+        logger.info("Downloading disc model weights from %s ...", url)
+        try:
+            def _log_progress(block_num: int, block_size: int, total_size: int) -> None:
+                if total_size > 0 and block_num % 500 == 0:
+                    downloaded = block_num * block_size
+                    pct = min(downloaded / total_size * 100, 100)
+                    logger.info("  %.1f%% (%d / %d MB)", pct, downloaded // 1_000_000, total_size // 1_000_000)
+
+            urllib.request.urlretrieve(url, str(tmp_path), reporthook=_log_progress)
+            tmp_path.rename(dest)
+            logger.info("Download complete: %s (%.1f MB)", dest, dest.stat().st_size / 1_000_000)
+            return True
+        except Exception as exc:
+            logger.warning("Failed to download weights: %s", exc)
+            if tmp_path.exists():
+                tmp_path.unlink()
+            return False
+
     def _load_model(self) -> Optional["RETFound_UNet"]:
         """Load the RETFound U-Net model with trained weights."""
         if torch is None:
@@ -81,8 +105,12 @@ class DiscDetectorService:
             return None
 
         if not os.path.exists(self.model_path):
-            logger.warning("Model weights not found at %s. Using fallback mode.", self.model_path)
-            return None
+            url = os.environ.get("DISC_MODEL_URL")
+            if url:
+                self._download_weights(url)
+            if not os.path.exists(self.model_path):
+                logger.warning("Model weights not found at %s. Using fallback mode.", self.model_path)
+                return None
 
         try:
             from src.models.retfound_unet import RETFound_UNet

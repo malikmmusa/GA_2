@@ -23,3 +23,10 @@ Atrophy Advisor is a two-service app: Python/FastAPI backend (port 8000) + React
 - **SAM-2 pip install**: `SAM-2>=1.0` in `requirements.txt` cannot be resolved from PyPI. It must be installed from GitHub first: `pip install "git+https://github.com/facebookresearch/sam2.git"`. The update script handles this.
 - **Model weights not in repo**: `weights/best_disc_model.pth` and `weights/sam2.1_hiera_tiny.pt` are gitignored. Disc detection and SAM-based GA refinement endpoints will return errors without them, but the rest of the API and all tests work fine.
 - **`pandas` needed for tests**: `test_disc_vs_ground_truth.py` imports `pandas`, which is not listed in `requirements.txt`. The update script installs it.
+
+### Production Deployment (Railway)
+
+- **Disc model weights**: The disc detector auto-downloads `best_disc_model.pth` on first startup if the env var `DISC_MODEL_URL` is set. Without this, disc detection silently falls back to a geometric heuristic (center of en-face, 30-70% height) which is completely wrong for real scans.
+  - Set `DISC_MODEL_URL=https://huggingface.co/malikmmusa/Atrophy_Advisor/resolve/main/best_disc_model.pth` in the Railway environment variables.
+  - Add a Railway volume mounted at `/app/weights` so the 1.25 GB file persists across restarts and is only downloaded once.
+  - Verify the model loaded by checking `GET /api/disc-detector/status`.
