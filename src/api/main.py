@@ -1,4 +1,6 @@
 """Main FastAPI application entry point for Atrophy Advisor."""
+import threading
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -10,6 +12,33 @@ from .constants import API_VERSION
 from .models.schemas import HealthStatusResponse, RootStatusResponse
 from .routes import calculations, disc_detection, fovea_detection, ga_segmentation, registration, report
 from .utils.status import build_status_payload
+from .utils.logger import get_logger
+
+logger = get_logger("main")
+
+
+def _preload_disc_detector() -> None:
+    """Pre-warm disc detector (incl. weight download) in a background thread."""
+    try:
+        from .dependencies import get_disc_detector
+        svc = get_disc_detector()
+        if svc.model is not None:
+            logger.info("Disc detector pre-loaded successfully on %s", svc.device)
+        else:
+            logger.warning("Disc detector running in fallback mode (no model weights)")
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Disc detector pre-load failed: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Kick off weight download + model load before the first request arrives.
+    # Runs in a daemon thread so startup is not blocked.
+    t = threading.Thread(target=_preload_disc_detector, daemon=True, name="disc-preload")
+    t.start()
+    logger.info("Disc detector pre-load started in background thread")
+    yield
+
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -17,7 +46,8 @@ app = FastAPI(
     description="OCT image analysis for Geographic Atrophy progression tracking",
     version=API_VERSION,
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS middleware for frontend integration
