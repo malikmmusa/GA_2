@@ -41,7 +41,7 @@ ROUTERS = (
 for router, tag in ROUTERS:
     app.include_router(router, prefix="/api", tags=[tag])
 
-@app.get("/", response_model=RootStatusResponse)
+@app.get("/api/status", response_model=RootStatusResponse)
 async def root() -> RootStatusResponse:
     """Root endpoint with API information."""
     return RootStatusResponse(
