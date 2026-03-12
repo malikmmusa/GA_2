@@ -836,8 +836,23 @@ function App() {
   /**
    * Handle PDF download
    */
-  const handleDownloadPDF = () => {
-    alert('PDF generation will be implemented in Phase 3');
+  const handleDownloadPDF = async () => {
+    const { imageBefore, imageAfter, progression } = state;
+    if (!imageBefore || !imageAfter || !progression) return;
+    try {
+      const blob = await api.generateReport(imageBefore, imageAfter, progression);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ga_progression_${imageBefore.date}_to_${imageAfter.date}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setState((prev) => ({
+        ...prev,
+        error: `PDF generation failed: ${extractErrorMessage(err)}`,
+      }));
+    }
   };
 
   const handleUnsupportedEyeSideOverride = () => {
@@ -851,10 +866,17 @@ function App() {
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="container mx-auto px-4 max-w-7xl">
         {/* Header */}
-        <header className="text-center mb-8">
+        <header className="text-center mb-6">
           <h1 className="text-4xl font-bold text-primary mb-2">Atrophy Advisor</h1>
           <p className="text-gray-600">OCT Image Analysis for Geographic Atrophy Progression</p>
         </header>
+
+        {/* HIPAA Disclaimer */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-6 text-xs text-blue-800 text-center">
+          <strong>Privacy Notice:</strong> This tool does not store, save, or transmit any patient data.
+          All image processing occurs within your browser session and is discarded upon page refresh.
+          The user assumes all responsibility for any protected health information (PHI) included in uploaded images.
+        </div>
 
         {/* Error Display */}
         {state.error && (
@@ -899,6 +921,11 @@ function App() {
                 manualGAMode={manualGAModeBefore}
                 isProcessingGA={isProcessingLocalGABefore}
               />
+              {state.imageBefore?.disc?.image_format === 'standalone' && (
+                <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2">
+                  Standalone en-face detected (e.g. Cirrus) — auto-detection limited, manual adjustments recommended.
+                </p>
+              )}
               {foveaConfirmedBefore && state.imageBefore?.fovea && (
                 <p className="text-sm text-green-600 mt-2">✓ Fovea confirmed</p>
               )}
@@ -954,6 +981,11 @@ function App() {
                   fovea_y: registrationResult.transformed_fovea_y,
                 } : undefined}
               />
+              {state.imageAfter?.disc?.image_format === 'standalone' && (
+                <p className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-2">
+                  Standalone en-face detected (e.g. Cirrus) — auto-detection limited, manual adjustments recommended.
+                </p>
+              )}
               {foveaConfirmedAfter && state.imageAfter?.fovea && (
                 <p className="text-sm text-green-600 mt-2">✓ Fovea confirmed</p>
               )}

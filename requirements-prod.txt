@@ -1,0 +1,19 @@
+# Production requirements (CPU-only, no test tooling)
+# torch and torchvision installed separately with CPU index URL -- see Dockerfile
+
+# Image Processing
+opencv-python-headless>=4.5.0
+scipy>=1.7.0
+numpy>=1.21.0
+
+# Model & Preprocessing
+albumentations>=1.1.0
+timm>=0.9.0
+
+# Web Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# PDF Generation
+reportlab>=4.0.0

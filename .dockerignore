@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Node
+src/frontend/node_modules/
+src/frontend/dist/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.cursor/
+.vscode/
+.idea/
+
+# Test & validation data (large, not needed in production)
+test_validation/
+input_images/
+scripts/
+tests/
+
+# Model weights (gitignored, mount as volume if needed)
+weights/
+
+# Misc
+*.md
+.env
+.env.*
+docker-compose*.yml

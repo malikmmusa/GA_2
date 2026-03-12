@@ -22,6 +22,7 @@ import csv
 import math
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Allow imports from repo root and scripts
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,7 @@ import numpy as np
 import gui_accuracy_validation as val
 from src.api.constants import DISC_DIAMETER_MICRONS
 from src.api.services.calculator import DistanceCalculatorService
+from src.api.services.disc_detector import DiscDetectorService
 from src.api.services.ga_segmenter import GASegmenterService
 
 # Default pixel-to-micron when disc not used (nearest_ga_point does not depend on this)
@@ -64,6 +66,7 @@ def enrich_row(
     segmenter: GASegmenterService,
     calculator: DistanceCalculatorService,
     output_dir: Path,
+    disc_detector: Optional["DiscDetectorService"] = None,
 ) -> None:
     """Fill metric columns for one summary row in place."""
     gt_x, gt_y = meta.ga_target_xy if meta.ga_target_xy else (None, None)
@@ -79,10 +82,26 @@ def enrich_row(
         row["prediction_detected"] = "no"
         return
 
+    # Detect disc to enable disc masking and proper crop radius in local seg
+    disc_cx: Optional[float] = None
+    disc_cy: Optional[float] = None
+    disc_h: Optional[float] = None
+    if disc_detector is not None:
+        try:
+            disc_info = disc_detector.detect_from_image(image, image_name=meta.filename)
+            disc_cx = disc_info.get("disc_center_x")
+            disc_cy = disc_info.get("disc_center_y")
+            disc_h = disc_info.get("disc_height_pixels")
+        except Exception as exc:
+            pass  # disc detection failed; proceed without masking
+
     contours = segmenter.segment_ga_local(
         image=image,
         click_x=float(gt_x),
         click_y=float(gt_y),
+        disc_center_x=disc_cx,
+        disc_center_y=disc_cy,
+        disc_height_pixels=disc_h,
         en_face_split_x=meta.split_x,
     )
     regions = segmenter.contours_to_json(contours)
@@ -119,6 +138,7 @@ def main() -> int:
     parser.add_argument("--raw-dir", type=Path, default=PROJECT_ROOT / "raw_marked")
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "test_validation")
     parser.add_argument("--use-sam", action="store_true", help="Use SAM2 for local segmentation (default: no)")
+    parser.add_argument("--use-disc", action="store_true", help="Enable disc detection for masking in local seg (default: no)")
     args = parser.parse_args()
 
     if not args.summary.exists():
@@ -137,13 +157,20 @@ def main() -> int:
     image_meta = val.prepare_image_meta(args.input_dir, args.raw_dir)
     segmenter = GASegmenterService(use_sam=args.use_sam)
     calculator = DistanceCalculatorService()
+    disc_detector: Optional[DiscDetectorService] = None
+    if args.use_disc:
+        try:
+            disc_detector = DiscDetectorService()
+            print("Disc detector initialised (enables disc masking in local seg).")
+        except Exception as exc:
+            print(f"Disc detector unavailable ({exc}); running without disc masking.")
 
     for i, row in enumerate(rows):
         filename = row.get("image_filename", "")
         meta = image_meta.get(filename)
         if meta is None:
             continue
-        enrich_row(row, meta, segmenter, calculator, args.output_dir)
+        enrich_row(row, meta, segmenter, calculator, args.output_dir, disc_detector=disc_detector)
         if (i + 1) % 10 == 0:
             print(f"  Enriched {i + 1}/{len(rows)} rows ...")
 

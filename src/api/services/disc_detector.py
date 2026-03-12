@@ -15,7 +15,7 @@ try:
 except Exception:  # pragma: no cover - requires torch
     ToTensorV2 = None
 
-from src.utils.image_utils import get_split_indices_and_images
+from src.utils.image_utils import classify_image_format, get_split_indices_and_images
 
 from ..constants import DISC_DIAMETER_MICRONS
 from ..utils.logger import get_logger
@@ -216,55 +216,61 @@ class DiscDetectorService:
     
     def detect_from_image(self, image: np.ndarray, image_name: Optional[str] = None) -> Dict[str, float]:
         """
-        Detect optic disc from a full composite OCT image.
-        
-        Args:
-            image: BGR image (numpy array) - full composite with B-scan and En-face
-        
+        Detect optic disc from an OCT image.
+
+        Supports two image formats:
+        - 'heidelberg': composite (B-scan left + en-face right) -- auto-splits on the divider
+        - 'standalone': single en-face panel (e.g. Cirrus) -- treats full image as en-face
+
         Returns:
-            Dictionary containing:
-                - disc_center_x: X coordinate in original image
-                - disc_center_y: Y coordinate in original image
-                - disc_top_y: Top Y coordinate of vertical line
-                - disc_bottom_y: Bottom Y coordinate of vertical line
-                - disc_height_pixels: Height of disc in pixels (1800 microns)
-                - pixel_to_micron_ratio: Conversion factor (1800 / height)
-                - en_face_split_x: X coordinate where en-face starts in original
+            Dictionary containing disc coordinates, pixel_to_micron_ratio, en_face_split_x,
+            and an 'image_format' key ('heidelberg' or 'standalone').
         """
-        # Step 1: Split the composite image
-        _, en_face, metadata = get_split_indices_and_images(
-            image,
-            divider_safety_margin=10
-        )
+        image_format = classify_image_format(image)
+        logger.debug("Detected image format: %s", image_format)
+
+        if image_format == "standalone":
+            # Treat the entire image as the en-face panel
+            en_face = image
+            en_face_split_x = 0
+        else:
+            # Step 1: Split the composite Heidelberg image
+            _, en_face, metadata = get_split_indices_and_images(
+                image,
+                divider_safety_margin=10
+            )
+            en_face_split_x = metadata['final_split_column']
 
         if self.model is None or self.transform is None:
-            return self._fallback_detect_from_marked_or_heuristic(
+            result = self._fallback_detect_from_marked_or_heuristic(
                 image=image,
                 image_name=image_name,
-                en_face_split_x=metadata['final_split_column']
+                en_face_split_x=en_face_split_x,
             )
-        
+            result['image_format'] = image_format
+            return result
+
         # Convert to RGB
         en_face_rgb = cv2.cvtColor(en_face, cv2.COLOR_BGR2RGB)
         h_ef, w_ef = en_face_rgb.shape[:2]
-        
+
         # Step 2: Preprocess
         augmented = self.transform(image=en_face_rgb)
         input_tensor = augmented['image'].unsqueeze(0).to(self.device)  # [1, 3, 224, 224]
-        
+
         # Step 3: Inference
         with torch.no_grad():
             output = self.model(input_tensor)  # [1, 1, 224, 224]
             heatmap = output.cpu().squeeze().numpy()  # [224, 224]
-        
+
         # Step 4: Extract Coordinates using "New Algorithm"
         coords = self._extract_disc_coordinates_new_algorithm(
             heatmap=heatmap,
             en_face_width=w_ef,
             en_face_height=h_ef,
-            en_face_split_x=metadata['final_split_column']
+            en_face_split_x=en_face_split_x,
         )
-        
+        coords['image_format'] = image_format
         return coords
     
     def _extract_disc_coordinates_new_algorithm(

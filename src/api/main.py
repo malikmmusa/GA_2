@@ -1,11 +1,14 @@
 """Main FastAPI application entry point for Atrophy Advisor."""
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from .constants import API_VERSION
 from .models.schemas import HealthStatusResponse, RootStatusResponse
-from .routes import calculations, disc_detection, fovea_detection, ga_segmentation, registration
+from .routes import calculations, disc_detection, fovea_detection, ga_segmentation, registration, report
 from .utils.status import build_status_payload
 
 # Initialize FastAPI app
@@ -32,6 +35,7 @@ ROUTERS = (
     (ga_segmentation.router, "GA Segmentation"),
     (calculations.router, "Calculations"),
     (registration.router, "Registration"),
+    (report.router, "Report"),
 )
 
 for router, tag in ROUTERS:
@@ -53,6 +57,11 @@ async def root() -> RootStatusResponse:
 async def health_check() -> HealthStatusResponse:
     """Health check endpoint."""
     return HealthStatusResponse(**build_status_payload("healthy"))
+
+# Serve built frontend static files in production (when /static dir exists)
+_static_dir = Path(__file__).parent.parent.parent / "static"
+if _static_dir.exists():
+    app.mount("/", StaticFiles(directory=str(_static_dir), html=True), name="static")
 
 if __name__ == "__main__":
     uvicorn.run(

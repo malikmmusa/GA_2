@@ -12,6 +12,7 @@ import type {
   ProgressionCalculationRequest,
   ProgressionCalculationResponse,
   ImageRegistrationResponse,
+  ImageAnalysis,
 } from '../types/api';
 
 const API_BASE_URL = '/api';
@@ -145,6 +146,42 @@ export async function calculateProgression(
 ): Promise<ProgressionCalculationResponse> {
   const response = await api.post<ProgressionCalculationResponse>('/calculate-progression', request);
   return response.data;
+}
+
+/**
+ * Generate a PDF report from analysis results
+ */
+export async function generateReport(
+  imageBefore: ImageAnalysis,
+  imageAfter: ImageAnalysis,
+  progression: ProgressionCalculationResponse,
+): Promise<Blob> {
+  const formData = new FormData();
+  formData.append('image_before', imageBefore.imageFile);
+  formData.append('image_after', imageAfter.imageFile);
+  formData.append('date_before', imageBefore.date);
+  formData.append('date_after', imageAfter.date);
+  formData.append('eye_side', imageBefore.fovea?.eye_side ?? 'OD');
+  formData.append('distance_before_microns', String(imageBefore.distance!.distance_microns));
+  formData.append('distance_after_microns', String(imageAfter.distance!.distance_microns));
+  formData.append('days_elapsed', String(progression.days_elapsed));
+  formData.append('distance_change_microns', String(progression.distance_change_microns));
+  formData.append('status', progression.status);
+  if (progression.rate_microns_per_year != null) {
+    formData.append('rate_microns_per_year', String(progression.rate_microns_per_year));
+  }
+  if (progression.rate_microns_per_month != null) {
+    formData.append('rate_microns_per_month', String(progression.rate_microns_per_month));
+  }
+  if (progression.years_until_involvement != null) {
+    formData.append('years_until_involvement', String(progression.years_until_involvement));
+  }
+  if (progression.predicted_foveal_involvement_date != null) {
+    formData.append('predicted_foveal_involvement_date', progression.predicted_foveal_involvement_date);
+  }
+
+  const response = await api.post('/generate-report', formData, { responseType: 'blob' });
+  return response.data as Blob;
 }
 
 /**

@@ -3,6 +3,35 @@ import numpy as np
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import find_peaks
 
+# Minimum aspect ratio (width/height) expected for a Heidelberg composite image.
+# Composites have B-scan + en-face side-by-side, making them considerably wider than tall.
+_HEIDELBERG_MIN_ASPECT_RATIO = 1.6
+
+
+def classify_image_format(img: np.ndarray) -> str:
+    """
+    Classify an OCT image as 'heidelberg' (composite B-scan + en-face) or
+    'standalone' (single en-face panel, e.g. Cirrus).
+
+    Detection logic:
+    1. If aspect ratio >= 1.6 AND a vertical divider is found → 'heidelberg'
+    2. If no divider found OR aspect ratio < 1.6 → 'standalone'
+
+    Returns:
+        'heidelberg' or 'standalone'
+    """
+    h, w = img.shape[:2]
+    aspect_ratio = w / max(h, 1)
+
+    if aspect_ratio < _HEIDELBERG_MIN_ASPECT_RATIO:
+        return "standalone"
+
+    divider_start, _ = detect_dividing_line(img)
+    if divider_start is not None:
+        return "heidelberg"
+
+    return "standalone"
+
 def process_green_line_precise(fundus_img):
     """
     Detects the green scan line to determine the Y-coordinate.

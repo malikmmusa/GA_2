@@ -36,6 +36,13 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
     });
   };
 
+  // Format "YYYY-MM" predicted date as "Month YYYY"
+  const formatPredictedMonth = (yearMonth: string): string => {
+    const parsed = new Date(`${yearMonth}-01`);
+    if (Number.isNaN(parsed.getTime())) return yearMonth;
+    return parsed.toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+  };
+
   return (
     <div className="card bg-blue-50 border-2 border-primary mt-8">
       <h2 className="text-2xl font-bold text-primary mb-6 text-center">
@@ -100,29 +107,32 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
             {/* Rate of Progression */}
             <div className="bg-orange-50 border border-orange-200 rounded p-4">
               <p className="text-gray-700 font-medium mb-2">Rate of Progression</p>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <p className="text-2xl font-bold text-orange-600">
-                    {progression.rate_microns_per_day?.toFixed(3)} µm/day
-                  </p>
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-orange-600">
-                    {progression.rate_microns_per_month?.toFixed(1)} µm/month
-                  </p>
-                </div>
+              <div className="flex items-baseline gap-4 flex-wrap">
+                <p className="text-3xl font-bold text-orange-600">
+                  {progression.rate_microns_per_year?.toFixed(1)} µm/year
+                </p>
+                <p className="text-base text-orange-400">
+                  ({progression.rate_microns_per_month?.toFixed(1)} µm/month)
+                </p>
               </div>
             </div>
 
             {/* Prediction */}
-            {progression.predicted_foveal_involvement_date && (
+            {(progression.years_until_involvement != null || progression.predicted_foveal_involvement_date) && (
               <div className="bg-red-50 border-2 border-red-500 rounded-lg p-6 text-center">
                 <p className="text-red-800 font-semibold text-lg mb-2">
                   ⚠️ PREDICTED FOVEAL INVOLVEMENT
                 </p>
-                <p className="text-3xl font-bold text-red-600">
-                  {formatDate(progression.predicted_foveal_involvement_date)}
-                </p>
+                {progression.years_until_involvement != null && (
+                  <p className="text-3xl font-bold text-red-600">
+                    ~{progression.years_until_involvement} years
+                  </p>
+                )}
+                {progression.predicted_foveal_involvement_date && (
+                  <p className="text-lg text-red-500 mt-1">
+                    approx. {formatPredictedMonth(progression.predicted_foveal_involvement_date)}
+                  </p>
+                )}
                 <p className="text-sm text-gray-600 mt-2">
                   Based on current rate of progression
                 </p>

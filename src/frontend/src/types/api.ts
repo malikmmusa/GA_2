@@ -10,6 +10,7 @@ export interface DiscDetectionResponse {
   disc_height_pixels: number;
   pixel_to_micron_ratio: number;
   en_face_split_x: number;
+  image_format: 'heidelberg' | 'standalone';
 }
 
 export interface FoveaDetectionRequest {
@@ -69,7 +70,9 @@ export interface ProgressionCalculationResponse {
   distance_change_microns: number;
   rate_microns_per_day: number | null;
   rate_microns_per_month: number | null;
+  rate_microns_per_year: number | null;
   predicted_foveal_involvement_date: string | null;
+  years_until_involvement: number | null;
 }
 
 export interface ImageRegistrationResponse {

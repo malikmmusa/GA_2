@@ -27,6 +27,10 @@ class DiscDetectionResponse(BaseModel):
         ge=0,
         description="X coordinate where en-face region starts in original image"
     )
+    image_format: Literal["heidelberg", "standalone"] = Field(
+        default="heidelberg",
+        description="Detected image format: 'heidelberg' (composite B-scan+en-face) or 'standalone' (Cirrus/single panel)"
+    )
     
     model_config = ConfigDict(
         json_schema_extra={
@@ -123,7 +127,9 @@ class ProgressionCalculationResponse(BaseModel):
     distance_change_microns: float
     rate_microns_per_day: Optional[float] = None
     rate_microns_per_month: Optional[float] = None
+    rate_microns_per_year: Optional[float] = None
     predicted_foveal_involvement_date: Optional[str] = None
+    years_until_involvement: Optional[float] = None
     status: Literal["progression", "no_progression", "error"] = Field(
         ...,
         description="Progression analysis status"

@@ -62,8 +62,8 @@ class GASegmenterService:
         # Keep top-N bright clusters to reduce failure when true GA is not brightest.
         self.top_cluster_count = min(max(1, n_clusters), 2)
         # Guardrails to suppress giant/border-connected false positives.
-        self.max_bbox_fraction = 0.65
-        self.max_region_fraction = 0.45
+        self.max_bbox_fraction = 0.50
+        self.max_region_fraction = 0.30
         self.border_margin_px = 3
         self.border_reject_area_fraction = 0.025
     
@@ -636,87 +636,110 @@ class GASegmenterService:
         click_y_crop = max(0, min(labels_crop.shape[0] - 1, click_y_crop))
         
         selected_cluster = labels_crop[click_y_crop, click_x_crop]
-        
+
         if selected_cluster == -1:
             # Click was on masked (disc) area
             logger.debug("GA-local click on masked disc area")
             return []
-        
-        logger.debug(
-            "GA-local selected cluster: %s (intensity: %.1f)",
-            selected_cluster,
-            centers[selected_cluster][0],
-        )
-        
-        # Create lesion mask from selected cluster
-        lesion_mask = (labels_crop == selected_cluster).astype(np.uint8) * 255
-        
-        # Relaxed morphological cleanup (smaller kernel)
+
+        # Build candidate cluster order: click cluster first, then others ranked by
+        # intensity proximity so we fall back to the most similar brightness class.
+        click_intensity = float(centers[selected_cluster][0])
+        other_clusters = [i for i in range(n_clusters_local) if i != selected_cluster]
+        other_clusters.sort(key=lambda i: abs(float(centers[i][0]) - click_intensity))
+        cluster_order = [selected_cluster] + other_clusters
+
+        crop_area = (x2 - x1) * (y2 - y1)
+        max_area_local = int(0.65 * crop_area)  # cap at 65% of crop; watershed splits blobs earlier
+        min_area_local = 100
         kernel_size_local = 5
         kernel = np.ones((kernel_size_local, kernel_size_local), np.uint8)
-        clean_mask = cv2.morphologyEx(lesion_mask, cv2.MORPH_OPEN, kernel)
-        clean_mask = cv2.morphologyEx(clean_mask, cv2.MORPH_CLOSE, kernel)
-        
-        # Find contours
-        contours_crop, _ = cv2.findContours(
-            clean_mask,
-            cv2.RETR_EXTERNAL,
-            cv2.CHAIN_APPROX_SIMPLE
-        )
-        
-        if not contours_crop:
-            logger.debug("GA-local no contours found after morphology")
-            return []
-        
-        # Relaxed filtering (lower min_area)
-        min_area_local = 100
-        valid_contours = []
-        
-        for cnt in contours_crop:
-            area = cv2.contourArea(cnt)
-            
-            if area < min_area_local:
-                continue
-            
-            # Circularity filter (reject circles)
-            perimeter = cv2.arcLength(cnt, True)
-            if perimeter == 0:
-                continue
-            circularity = 4 * np.pi * (area / (perimeter * perimeter))
-            if circularity > self.max_circularity:
-                continue
-            
-            valid_contours.append(cnt)
-        
-        if not valid_contours:
-            logger.debug("GA-local no valid contours after filtering")
-            return []
-        
-        # Find contour containing or nearest to click point
         click_pt_crop = np.array([click_x_crop, click_y_crop])
+
         best_contour = None
-        min_distance = float('inf')
-        
-        for cnt in valid_contours:
-            # Check if point is inside
-            dist = cv2.pointPolygonTest(cnt, (int(click_x_crop), int(click_y_crop)), True)
-            
-            if dist >= 0:
-                # Point is inside this contour
-                best_contour = cnt
-                break
-            else:
-                # Point is outside, measure distance to nearest point on contour
+
+        for candidate_cluster in cluster_order:
+            logger.debug(
+                "GA-local trying cluster %s (intensity: %.1f)",
+                candidate_cluster,
+                centers[candidate_cluster][0],
+            )
+
+            # Create lesion mask from candidate cluster
+            lesion_mask = (labels_crop == candidate_cluster).astype(np.uint8) * 255
+
+            # Relaxed morphological cleanup (smaller kernel)
+            clean_mask = cv2.morphologyEx(lesion_mask, cv2.MORPH_OPEN, kernel)
+            clean_mask = cv2.morphologyEx(clean_mask, cv2.MORPH_CLOSE, kernel)
+
+            # Watershed splitting when the mask contains a large merged blob.
+            # Use an 8% threshold (vs 15% for global) so that local blobs are split
+            # more aggressively; this produces smaller per-region pieces that the
+            # click-point selection below can pick from accurately.
+            contours_pre, _ = cv2.findContours(clean_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours_pre:
+                max_pre_area = max(cv2.contourArea(c) for c in contours_pre)
+                if max_pre_area > 0.08 * crop_area:
+                    clean_mask = self._apply_watershed_splitting(clean_mask)
+
+            # Find contours after potential watershed split
+            contours_crop, _ = cv2.findContours(
+                clean_mask,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+
+            if not contours_crop:
+                logger.debug("GA-local cluster %s: no contours after morphology", candidate_cluster)
+                continue
+
+            # Filter: min area, max area cap, circularity
+            valid_contours = []
+            for cnt in contours_crop:
+                area = cv2.contourArea(cnt)
+                if area < min_area_local:
+                    continue
+                if area > max_area_local:
+                    continue
+                perimeter = cv2.arcLength(cnt, True)
+                if perimeter == 0:
+                    continue
+                circularity = 4 * np.pi * (area / (perimeter * perimeter))
+                if circularity > self.max_circularity:
+                    continue
+                valid_contours.append(cnt)
+
+            if not valid_contours:
+                logger.debug("GA-local cluster %s: no valid contours after filtering", candidate_cluster)
+                continue
+
+            # Pick the contour containing the click, or nearest to it
+            min_distance = float('inf')
+            for cnt in valid_contours:
+                dist = cv2.pointPolygonTest(cnt, (int(click_x_crop), int(click_y_crop)), True)
+                if dist >= 0:
+                    best_contour = cnt
+                    break
                 cnt_points = cnt.reshape(-1, 2)
-                distances = np.sqrt(np.sum((cnt_points - click_pt_crop)**2, axis=1))
-                nearest_dist = np.min(distances)
-                
+                nearest_dist = float(np.min(np.sqrt(np.sum((cnt_points - click_pt_crop) ** 2, axis=1))))
                 if nearest_dist < min_distance:
                     min_distance = nearest_dist
                     best_contour = cnt
-        
+
+            if best_contour is not None:
+                logger.debug(
+                    "GA-local cluster %s (intensity %.1f): found region area %.0f px²",
+                    candidate_cluster,
+                    float(centers[candidate_cluster][0]),
+                    cv2.contourArea(best_contour),
+                )
+                break
+
+            # Reset before trying next cluster
+            best_contour = None
+
         if best_contour is None:
-            logger.debug("GA-local no contour found near click")
+            logger.debug("GA-local no contour found near click across all clusters")
             return []
         
         # Adjust contour back to en-face coordinates

@@ -11,6 +11,7 @@ from ..utils.logger import get_logger
 logger = get_logger("services.calculator")
 
 AVERAGE_DAYS_PER_MONTH = 30.44
+AVERAGE_DAYS_PER_YEAR = 365.25
 FLOAT_TOLERANCE = 1e-6
 
 
@@ -103,7 +104,9 @@ class ProgressionCalculatorService:
             "distance_change_microns": 0.0,
             "rate_microns_per_day": None,
             "rate_microns_per_month": None,
+            "rate_microns_per_year": None,
             "predicted_foveal_involvement_date": None,
+            "years_until_involvement": None,
         }
 
     @staticmethod
@@ -158,12 +161,14 @@ class ProgressionCalculatorService:
                 )
 
             rate_per_month = rate_per_day * AVERAGE_DAYS_PER_MONTH
+            rate_per_year = rate_per_day * AVERAGE_DAYS_PER_YEAR
             days_to_fovea = max(0.0, distance_after_microns / rate_per_day)
+            years_until_involvement = round(days_to_fovea / AVERAGE_DAYS_PER_YEAR, 1) if days_to_fovea > 0 else None
             predicted_foveal_involvement_date = None
 
             try:
                 predicted_date = dt_after + timedelta(days=days_to_fovea)
-                predicted_foveal_involvement_date = predicted_date.strftime("%Y-%m-%d")
+                predicted_foveal_involvement_date = predicted_date.strftime("%Y-%m")
             except OverflowError:
                 logger.warning("Predicted foveal involvement date overflow for %.3f days", days_to_fovea)
 
@@ -174,7 +179,9 @@ class ProgressionCalculatorService:
                 "distance_change_microns": round(distance_change, 2),
                 "rate_microns_per_day": round(rate_per_day, 3),
                 "rate_microns_per_month": round(rate_per_month, 2),
+                "rate_microns_per_year": round(rate_per_year, 1),
                 "predicted_foveal_involvement_date": predicted_foveal_involvement_date,
+                "years_until_involvement": years_until_involvement,
             }
 
         if math.isclose(distance_change, 0.0, abs_tol=FLOAT_TOLERANCE):
@@ -186,7 +193,9 @@ class ProgressionCalculatorService:
                 "distance_change_microns": 0.0,
                 "rate_microns_per_day": 0.0,
                 "rate_microns_per_month": 0.0,
+                "rate_microns_per_year": 0.0,
                 "predicted_foveal_involvement_date": None,
+                "years_until_involvement": None,
             }
 
         logger.warning("Negative progression detected (%.3f µm)", distance_change)
@@ -200,5 +209,7 @@ class ProgressionCalculatorService:
             "distance_change_microns": round(distance_change, 2),
             "rate_microns_per_day": None,
             "rate_microns_per_month": None,
+            "rate_microns_per_year": None,
             "predicted_foveal_involvement_date": None,
+            "years_until_involvement": None,
         }
