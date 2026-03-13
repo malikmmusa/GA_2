@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { SetStateAction } from 'react';
 import { ImageUpload } from './components/ImageUpload';
-import { ImageCanvas } from './components/ImageCanvas';
+import { ImageCanvas, renderAnnotatedImageToBlob } from './components/ImageCanvas';
 import { ResultsPanel } from './components/ResultsPanel';
 import * as api from './services/api';
 import type { ImageAnalysis, AppState, ImageRegistrationResponse } from './types/api';
@@ -840,7 +840,25 @@ function App() {
     const { imageBefore, imageAfter, progression } = state;
     if (!imageBefore || !imageAfter || !progression) return;
     try {
-      const blob = await api.generateReport(imageBefore, imageAfter, progression);
+      // Render annotated overlays to blobs for embedding in the PDF
+      let annotatedBefore: Blob | undefined;
+      let annotatedAfter: Blob | undefined;
+      try {
+        [annotatedBefore, annotatedAfter] = await Promise.all([
+          renderAnnotatedImageToBlob(imageBefore.imageUrl, imageBefore),
+          renderAnnotatedImageToBlob(imageAfter.imageUrl, imageAfter),
+        ]);
+      } catch {
+        // Non-fatal: skip annotated images if rendering fails
+      }
+
+      const blob = await api.generateReport(
+        imageBefore,
+        imageAfter,
+        progression,
+        annotatedBefore,
+        annotatedAfter,
+      );
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

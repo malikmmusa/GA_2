@@ -155,6 +155,8 @@ export async function generateReport(
   imageBefore: ImageAnalysis,
   imageAfter: ImageAnalysis,
   progression: ProgressionCalculationResponse,
+  imageBeforeAnnotated?: Blob,
+  imageAfterAnnotated?: Blob,
 ): Promise<Blob> {
   const formData = new FormData();
   formData.append('image_before', imageBefore.imageFile);
@@ -178,6 +180,12 @@ export async function generateReport(
   }
   if (progression.predicted_foveal_involvement_date != null) {
     formData.append('predicted_foveal_involvement_date', progression.predicted_foveal_involvement_date);
+  }
+  if (imageBeforeAnnotated) {
+    formData.append('image_before_annotated', imageBeforeAnnotated, 'before_annotated.png');
+  }
+  if (imageAfterAnnotated) {
+    formData.append('image_after_annotated', imageAfterAnnotated, 'after_annotated.png');
   }
 
   const response = await api.post('/generate-report', formData, { responseType: 'blob' });

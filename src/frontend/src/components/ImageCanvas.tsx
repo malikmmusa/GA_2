@@ -260,6 +260,45 @@ function drawAnnotatedImage(
   }
 }
 
+/**
+ * Render an annotated version of an OCT image to a Blob.
+ * Used by the PDF report flow to include overlay images in the PDF.
+ * Draws disc line, fovea dot, GA region, and distance measurement line
+ * using the same logic as the interactive canvas.
+ */
+export function renderAnnotatedImageToBlob(
+  imageUrl: string,
+  imageAnalysis: ImageAnalysis
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Could not get 2D context for offscreen canvas'));
+        return;
+      }
+      drawAnnotatedImage(ctx, img, imageAnalysis, 1, true, null, undefined, false);
+      canvas.toBlob(
+        (blob) => {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error('Canvas toBlob returned null'));
+          }
+        },
+        'image/png'
+      );
+    };
+    img.onerror = () => reject(new Error(`Failed to load image: ${imageUrl}`));
+    img.src = imageUrl;
+  });
+}
+
 export const ImageCanvas: React.FC<ImageCanvasProps> = ({
   imageAnalysis,
   onFoveaClick,

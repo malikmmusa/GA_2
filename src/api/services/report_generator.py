@@ -56,6 +56,8 @@ class ReportGeneratorService:
         years_until_involvement: Optional[float],
         predicted_foveal_involvement_date: Optional[str],
         status: str,
+        image_before_annotated_bytes: Optional[bytes] = None,
+        image_after_annotated_bytes: Optional[bytes] = None,
     ) -> bytes:
         """Generate PDF and return as bytes."""
         buf = io.BytesIO()
@@ -119,7 +121,38 @@ class ReportGeneratorService:
             ("BOTTOMPADDING", (0, 0), (-1, 0), 4),
         ]))
         story.append(img_table)
-        story.append(Spacer(1, 0.2 * inch))
+        story.append(Spacer(1, 0.1 * inch))
+
+        # Annotated overlay images (when supplied by the frontend)
+        if image_before_annotated_bytes and image_after_annotated_bytes:
+            ann_before = self._bytes_to_rl_image(image_before_annotated_bytes, max_width=3.2 * inch, max_height=2.5 * inch)
+            ann_after = self._bytes_to_rl_image(image_after_annotated_bytes, max_width=3.2 * inch, max_height=2.5 * inch)
+
+            ann_label_style = ParagraphStyle(
+                "ann_img_label",
+                parent=styles["Normal"],
+                fontSize=9,
+                textColor=colors.HexColor("#444444"),
+                alignment=1,
+            )
+            ann_table_data = [
+                [
+                    Paragraph(f"<b>Image 1 (Before)</b> — with annotations<br/>{self._fmt_date(date_before)}", ann_label_style),
+                    Paragraph(f"<b>Image 2 (After)</b> — with annotations<br/>{self._fmt_date(date_after)}", ann_label_style),
+                ],
+                [ann_before or Paragraph("(Annotated image unavailable)", styles["Normal"]),
+                 ann_after or Paragraph("(Annotated image unavailable)", styles["Normal"])],
+            ]
+            ann_table = Table(ann_table_data, colWidths=[3.35 * inch, 3.35 * inch])
+            ann_table.setStyle(TableStyle([
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 4),
+            ]))
+            story.append(ann_table)
+            story.append(Spacer(1, 0.1 * inch))
+
+        story.append(Spacer(1, 0.1 * inch))
 
         # Measurements table
         section_style = ParagraphStyle(

@@ -30,6 +30,8 @@ async def generate_report(
     rate_microns_per_month: Optional[float] = Form(None),
     years_until_involvement: Optional[float] = Form(None),
     predicted_foveal_involvement_date: Optional[str] = Form(None),
+    image_before_annotated: Optional[UploadFile] = File(None),
+    image_after_annotated: Optional[UploadFile] = File(None),
 ) -> StreamingResponse:
     """
     Generate a PDF progression report combining both images and analysis results.
@@ -38,6 +40,8 @@ async def generate_report(
     """
     before_bytes = await image_before.read()
     after_bytes = await image_after.read()
+    before_annotated_bytes = await image_before_annotated.read() if image_before_annotated else None
+    after_annotated_bytes = await image_after_annotated.read() if image_after_annotated else None
 
     pdf_bytes = _report_service.generate(
         image_before_bytes=before_bytes,
@@ -54,6 +58,8 @@ async def generate_report(
         years_until_involvement=years_until_involvement,
         predicted_foveal_involvement_date=predicted_foveal_involvement_date,
         status=status,
+        image_before_annotated_bytes=before_annotated_bytes,
+        image_after_annotated_bytes=after_annotated_bytes,
     )
 
     filename = f"ga_progression_report_{date_before}_to_{date_after}.pdf"
