@@ -175,7 +175,8 @@ class HealthStatusResponse(BaseModel):
 class DiscDetectorStatusResponse(BaseModel):
     """Response model for disc detector service status."""
 
-    status: Literal["ready"]
+    status: Literal["ready", "fallback"]
+    model_loaded: bool
     model_path: str
     device: str
     img_size: int

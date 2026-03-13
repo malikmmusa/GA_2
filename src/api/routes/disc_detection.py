@@ -48,7 +48,8 @@ async def get_disc_detector_status() -> DiscDetectorStatusResponse:
     detector = get_disc_detector()
     return DiscDetectorStatusResponse(
         **build_status_payload(
-            "ready",
+            "ready" if detector.model is not None else "fallback",
+            model_loaded=detector.model is not None,
             model_path=detector.model_path,
             device=str(detector.device),
             img_size=detector.img_size,

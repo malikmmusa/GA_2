@@ -21,12 +21,16 @@ def _preload_disc_detector() -> None:
     """Pre-warm disc detector (incl. weight download) in a background thread."""
     try:
         from .dependencies import get_disc_detector
+        print("[disc-preload] Starting disc detector initialization...", flush=True)
         svc = get_disc_detector()
         if svc.model is not None:
+            print(f"[disc-preload] Model loaded successfully on {svc.device}", flush=True)
             logger.info("Disc detector pre-loaded successfully on %s", svc.device)
         else:
+            print("[disc-preload] WARNING: model is None — running in fallback mode (check DISC_MODEL_URL env var)", flush=True)
             logger.warning("Disc detector running in fallback mode (no model weights)")
     except Exception as exc:  # pragma: no cover
+        print(f"[disc-preload] FAILED: {exc}", flush=True)
         logger.warning("Disc detector pre-load failed: %s", exc)
 
 
