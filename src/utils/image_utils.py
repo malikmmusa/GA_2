@@ -48,18 +48,34 @@ def process_green_line_precise(fundus_img):
         return None
     return int(np.mean(green_points[:, 0, 1]))
 
-def find_fovea_dark_spot_refined(fundus_img, center_y, search_center_x=None, band_height=1):
+def find_fovea_dark_spot_refined(
+    fundus_img,
+    center_y,
+    search_center_x=None,
+    band_height=1,
+    search_start_x=None,
+    search_end_x=None,
+    ideal_x=None,
+):
     """
     Finds the fovea X-coordinate by analyzing intensity profiles.
-    
+
     Args:
         fundus_img: The En-Face image (BGR or Gray).
         center_y: The Y-coordinate to search around.
-        search_center_x: Optional X-coordinate hint to select the best peak. 
+        search_center_x: Optional X-coordinate hint to select the best peak.
                          If None, uses the center of the search window.
-        band_height: Height of the strip to analyze. 
+        band_height: Height of the strip to analyze.
                      Use 1 for precise lines (Green Line).
                      Use ~60 for estimated regions (Geometric Fallback).
+        search_start_x: Explicit left boundary of the search window (local coords).
+                        Overrides the auto-computed window when provided together
+                        with search_end_x.
+        search_end_x: Explicit right boundary of the search window (local coords).
+        ideal_x: Explicit selection target (local coords). When provided, the valley
+                 closest to this point is chosen, overriding the window-centre default.
+                 Useful when search bounds (temporal half) differ from the best-guess
+                 peak location (en-face centre).
     """
     if center_y is None: return None
     
@@ -84,9 +100,20 @@ def find_fovea_dark_spot_refined(fundus_img, center_y, search_center_x=None, ban
     else:
         line_profile = roi_gray[0, :]
 
-    # Define Search Area (Center 30% or surrounding the estimate)
-    # If we have a specific X estimate, looking in a window around it is safer
-    if search_center_x is not None:
+    # Define Search Area
+    # Priority order:
+    #   1. Explicit (search_start_x, search_end_x) – anatomically constrained temporal half
+    #   2. search_center_x ± 25 % window
+    #   3. Centre 30 % of image (default)
+    if search_start_x is not None and search_end_x is not None:
+        start_search = max(0, int(search_start_x))
+        end_search = min(w, int(search_end_x))
+        # ideal = explicit ideal_x if given, otherwise centre of the supplied region
+        if ideal_x is not None:
+            ideal_peak_x = int(np.clip(ideal_x, start_search, end_search - 1)) - start_search
+        else:
+            ideal_peak_x = (start_search + end_search) // 2 - start_search
+    elif search_center_x is not None:
         window_radius = int(w * 0.25) # Search +/- 25% of width around estimate
         start_search = max(0, int(search_center_x - window_radius))
         end_search = min(w, int(search_center_x + window_radius))
@@ -118,11 +145,17 @@ def find_fovea_dark_spot_refined(fundus_img, center_y, search_center_x=None, ban
     best_peak_idx = peaks[np.argmin(np.abs(peaks - ideal_peak_x))]
     return start_search + best_peak_idx
 
-def find_fovea_anatomy_aware(full_image, en_face_roi_x, est_x=None, est_y=None):
+def find_fovea_anatomy_aware(full_image, en_face_roi_x, est_x=None, est_y=None,
+                             disc_local_x=None, eye_side=None):
     """
     Attempts to find the fovea using anatomy-aware rules.
     1. Green Line Anchor (Precise Y) -> Scan Line X
     2. Geometric Fallback (Approx Y) -> Scan Band X -> Refine Y
+
+    When disc_local_x and eye_side are supplied the search is restricted to the
+    temporal half of the en-face (fovea must be temporal to the disc) and the
+    ideal-peak selection is the centre of that region, which is robust to the
+    exact est_x value.
     """
     # Extract En-Face region
     en_face_img = full_image[:, en_face_roi_x:, :]
@@ -130,21 +163,44 @@ def find_fovea_anatomy_aware(full_image, en_face_roi_x, est_x=None, est_y=None):
     
     # Adjust est_x to be local to en-face image
     local_est_x = (est_x - en_face_roi_x) if est_x is not None else None
+
+    # Compute temporal-half search bounds when disc position & eye side are known.
+    # Fovea is always TEMPORAL to the disc:
+    #   OD (disc on left  → fovea on right): search [disc_local_x, w]
+    #   OS (disc on right → fovea on left):  search [0, disc_local_x]
+    # Using the centre of the temporal half as the selection ideal keeps behaviour
+    # robust to imprecise est_x (previously the old broken est_x accidentally
+    # triggered a full-width centre-of-region search, which happened to work well).
+    search_start_x = None
+    search_end_x = None
+    if disc_local_x is not None and eye_side is not None:
+        if eye_side == "OD":
+            search_start_x = int(disc_local_x)
+            search_end_x = w
+        else:  # OS
+            search_start_x = 0
+            search_end_x = int(disc_local_x)
     
     green_y = process_green_line_precise(en_face_img)
     
     if green_y is not None:
         # STRATEGY A: Green Line Found (Precise)
         search_y = green_y
-        # Use a tight band (or just the line)
-        fovea_x_local = find_fovea_dark_spot_refined(en_face_img, search_y, local_est_x, band_height=1)
+        fovea_x_local = find_fovea_dark_spot_refined(
+            en_face_img, search_y, local_est_x, band_height=1,
+            search_start_x=search_start_x, search_end_x=search_end_x,
+            ideal_x=w // 2,  # fovea is near en-face centre; use it as selection ideal
+        )
         final_y = green_y
         method = "Anatomy (Green Line)"
     elif est_y is not None:
         # STRATEGY B: Green Line Missing (Geometric Fallback)
         search_y = est_y
-        # Use a WIDER band to account for Y-estimation error
-        fovea_x_local = find_fovea_dark_spot_refined(en_face_img, search_y, local_est_x, band_height=60)
+        fovea_x_local = find_fovea_dark_spot_refined(
+            en_face_img, search_y, local_est_x, band_height=60,
+            search_start_x=search_start_x, search_end_x=search_end_x,
+            ideal_x=w // 2,
+        )
         
         if fovea_x_local is None: return None
         

@@ -489,14 +489,14 @@ class GASegmenterService:
         disc_center_y: Optional[float] = None,
         disc_height_pixels: Optional[float] = None,
         en_face_split_x: Optional[int] = None,
-        crop_radius_multiplier: float = 2.5
+        crop_radius_multiplier: float = 2.5,
+        fovea_x: Optional[float] = None,
+        fovea_y: Optional[float] = None,
+        min_fovea_ga_dist_px: float = 12.0,
     ) -> List[np.ndarray]:
         """
         Segment GA region locally around a clicked point with relaxed parameters.
-        
-        This is a fallback method for when global segmentation misses a visible GA region.
-        Uses relaxed clustering and morphology parameters to catch smaller/dimmer lesions.
-        
+
         Args:
             image: Full composite OCT image (BGR)
             click_x: X coordinate of user click (original image space)
@@ -506,9 +506,12 @@ class GASegmenterService:
             disc_height_pixels: Optional disc height for crop radius calculation
             en_face_split_x: Optional split point to extract en-face region
             crop_radius_multiplier: Multiplier for crop radius (default: 2.5 * disc_height)
-        
-        Returns:
-            List containing 0 or 1 contour (numpy array) in original image coordinates
+            fovea_x: Optional fovea X (original image space) for proximity filtering.
+            fovea_y: Optional fovea Y (original image space) for proximity filtering.
+            min_fovea_ga_dist_px: Minimum acceptable distance from contour to fovea.
+                Candidate contours whose nearest vertex is closer than this are
+                flagged as fovea-contaminated and skipped in favour of less-
+                contaminated alternatives (if any).
         """
         # Extract en-face region if split point provided
         if en_face_split_x is not None:
@@ -713,18 +716,53 @@ class GASegmenterService:
                 logger.debug("GA-local cluster %s: no valid contours after filtering", candidate_cluster)
                 continue
 
-            # Pick the contour containing the click, or nearest to it
-            min_distance = float('inf')
+            # Pick the contour containing the click, or nearest to it.
+            # Prefer contours that are not contaminated (i.e. not touching the fovea).
+            def _nearest_to_fovea(cnt: np.ndarray) -> float:
+                """Min distance from contour vertices to fovea (in en-face / crop space)."""
+                if fovea_x is None or fovea_y is None:
+                    return float("inf")
+                # Convert fovea to crop-local coords
+                fovea_local_x = fovea_x - (en_face_split_x or 0) - x1
+                fovea_local_y = fovea_y - y1
+                pts = cnt.reshape(-1, 2).astype(np.float64)
+                fpt = np.array([fovea_local_x, fovea_local_y], dtype=np.float64)
+                return float(np.min(np.linalg.norm(pts - fpt, axis=1)))
+
+            click_pt_local = (int(click_x_crop), int(click_y_crop))
+            clean_contours_with_meta = []
             for cnt in valid_contours:
-                dist = cv2.pointPolygonTest(cnt, (int(click_x_crop), int(click_y_crop)), True)
-                if dist >= 0:
-                    best_contour = cnt
-                    break
-                cnt_points = cnt.reshape(-1, 2)
-                nearest_dist = float(np.min(np.sqrt(np.sum((cnt_points - click_pt_crop) ** 2, axis=1))))
-                if nearest_dist < min_distance:
-                    min_distance = nearest_dist
-                    best_contour = cnt
+                dist_to_click = cv2.pointPolygonTest(cnt, click_pt_local, True)
+                pts = cnt.reshape(-1, 2)
+                nearest_click_dist = float(
+                    np.min(np.sqrt(np.sum((pts - click_pt_crop) ** 2, axis=1)))
+                )
+                near_fovea = _nearest_to_fovea(cnt) < min_fovea_ga_dist_px
+                contains_click = dist_to_click >= 0
+                clean_contours_with_meta.append((cnt, contains_click, nearest_click_dist, near_fovea))
+
+            # Sort: contains_click first, then not-near-fovea, then by click distance
+            clean_contours_with_meta.sort(
+                key=lambda t: (not t[1], t[3], t[2])
+            )
+
+            for cnt, contains_click, nearest_dist, near_fovea in clean_contours_with_meta:
+                if near_fovea:
+                    logger.debug(
+                        "GA-local cluster %s: contour closest to fovea < %.0f px, skipping",
+                        candidate_cluster, min_fovea_ga_dist_px,
+                    )
+                    continue
+                best_contour = cnt
+                break
+
+            # Fallback: if all contours were near fovea, use the one closest to click
+            if best_contour is None and clean_contours_with_meta:
+                best_contour = clean_contours_with_meta[0][0]
+                logger.debug(
+                    "GA-local cluster %s: all contours near fovea, using closest to click (fallback)",
+                    candidate_cluster,
+                )
 
             if best_contour is not None:
                 logger.debug(

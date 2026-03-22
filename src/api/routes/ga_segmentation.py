@@ -75,26 +75,12 @@ async def segment_ga_local(
     disc_center_x: Optional[float] = Query(None),
     disc_center_y: Optional[float] = Query(None),
     disc_height_pixels: Optional[float] = Query(None),
-    en_face_split_x: Optional[int] = Query(None)
+    en_face_split_x: Optional[int] = Query(None),
+    fovea_x: Optional[float] = Query(None, description="Fovea X for proximity filtering"),
+    fovea_y: Optional[float] = Query(None, description="Fovea Y for proximity filtering"),
 ) -> GASegmentationResponse:
     """
     Segment GA region locally around a clicked point (fallback for missed regions).
-    
-    Uses relaxed clustering parameters and selects the cluster that the clicked pixel
-    belongs to. This is more permissive than global segmentation and helps catch
-    GA regions that were filtered out in the global pass.
-    
-    Args:
-        file: Uploaded OCT image
-        click_x: X coordinate of user click (original image space)
-        click_y: Y coordinate of user click (original image space)
-        disc_center_x: Optional disc center X for masking and crop radius
-        disc_center_y: Optional disc center Y for masking
-        disc_height_pixels: Optional disc height for crop radius calculation
-        en_face_split_x: Optional split point to extract en-face region
-    
-    Returns:
-        GASegmentationResponse with 0 or 1 region
     """
     image = await decode_uploaded_image(file, file_role="image")
 
@@ -109,7 +95,9 @@ async def segment_ga_local(
         disc_center_x=disc_center_x,
         disc_center_y=disc_center_y,
         disc_height_pixels=disc_height_pixels,
-        en_face_split_x=en_face_split_x
+        en_face_split_x=en_face_split_x,
+        fovea_x=fovea_x,
+        fovea_y=fovea_y,
     )
 
     # Convert to JSON-serializable format

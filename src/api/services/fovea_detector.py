@@ -53,13 +53,16 @@ class FoveaDetectorService:
         en_face_width = width - en_face_split_x
         en_face_center_x = en_face_split_x + (en_face_width / 2)
         
-        # Determine eye side based on disc position
+        # Determine eye side based on disc position.
+        # Anatomically: the fovea is always temporal to the disc.
+        # OD (right eye): disc is nasal = left side → fovea is right → est_x = disc_x + offset
+        # OS (left eye):  disc is nasal = right side → fovea is left → est_x = disc_x - offset
         if disc_center_x > en_face_center_x:
             eye_side = "OS"  # Left eye (disc on right side of en-face)
-            est_x = disc_center_x + (2.5 * disc_height_pixels)
+            est_x = disc_center_x - (2.5 * disc_height_pixels)
         else:
             eye_side = "OD"  # Right eye (disc on left side of en-face)
-            est_x = disc_center_x - (2.5 * disc_height_pixels)
+            est_x = disc_center_x + (2.5 * disc_height_pixels)
         
         est_y = disc_center_y + (0.15 * disc_height_pixels)
         
@@ -68,7 +71,9 @@ class FoveaDetectorService:
             image,
             en_face_split_x,
             est_x=est_x,
-            est_y=est_y
+            est_y=est_y,
+            disc_local_x=disc_center_x - en_face_split_x,
+            eye_side=eye_side,
         )
         
         if anatomy_result:
@@ -103,7 +108,63 @@ class FoveaDetectorService:
                 fovea_x, fovea_y = initial_guess
         else:
             fovea_x, fovea_y = initial_guess
-        
+
+        # Anatomical validation with opposite-side retry
+        if not self.validate_fovea_location(
+            float(fovea_x), float(fovea_y),
+            disc_center_x, disc_center_y,
+            disc_height_pixels, width, height
+        ):
+            logger.warning(
+                "%s: initial fovea (%.0f, %.0f) failed validation; trying opposite eye side",
+                image_name, fovea_x, fovea_y,
+            )
+            # Flip eye side and recompute estimate
+            if eye_side == "OS":
+                retry_est_x = disc_center_x + (2.5 * disc_height_pixels)
+                retry_eye_side = "OD"
+            else:
+                retry_est_x = disc_center_x - (2.5 * disc_height_pixels)
+                retry_eye_side = "OS"
+
+            # Clamp retry estimate to the en-face region so we don't search in B-scan space
+            en_face_left = float(en_face_split_x)
+            en_face_right = float(width - 1)
+            retry_est_x = float(np.clip(retry_est_x, en_face_left, en_face_right))
+
+            retry_result = find_fovea_anatomy_aware(
+                image, en_face_split_x, est_x=retry_est_x, est_y=est_y,
+                disc_local_x=disc_center_x - en_face_split_x,
+                eye_side=retry_eye_side,
+            )
+            if retry_result:
+                retry_guess, _ = retry_result
+            else:
+                retry_guess = (int(retry_est_x), int(est_y))
+
+            rx, ry = float(retry_guess[0]), float(retry_guess[1])
+            if self.validate_fovea_location(
+                rx, ry, disc_center_x, disc_center_y,
+                disc_height_pixels, width, height
+            ):
+                logger.info(
+                    "%s: opposite-side retry passed validation (%.0f, %.0f) eye=%s",
+                    image_name, rx, ry, retry_eye_side,
+                )
+                fovea_x, fovea_y = rx, ry
+                eye_side = retry_eye_side
+                detection_method = detection_method + "_retry"
+            else:
+                # Both sides failed — fall back to en-face center Y, disc Y as coords
+                en_face_center_fallback_x = en_face_split_x + en_face_width / 2.0
+                fovea_x = en_face_center_fallback_x
+                fovea_y = disc_center_y
+                detection_method = detection_method + "_center_fallback"
+                logger.warning(
+                    "%s: both eye sides failed validation; using en-face center fallback (%.0f, %.0f)",
+                    image_name, fovea_x, fovea_y,
+                )
+
         return {
             'fovea_x': float(fovea_x),
             'fovea_y': float(fovea_y),
@@ -137,9 +198,9 @@ class FoveaDetectorService:
         if not (0 <= fovea_x < image_width and 0 <= fovea_y < image_height):
             return False
         
-        # Check distance from disc (should be 2-3 disc diameters away)
+        # Check distance from disc (papillofoveal distance ≈ 2.2 disc diameters)
         distance = np.hypot(fovea_x - disc_center_x, fovea_y - disc_center_y)
-        
+
         min_distance = 1.5 * disc_height_pixels
         max_distance = 4.0 * disc_height_pixels
         

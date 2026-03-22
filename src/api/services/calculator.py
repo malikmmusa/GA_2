@@ -37,9 +37,20 @@ class DistanceCalculatorService:
         fovea_y: float,
         ga_region: List[Tuple[int, int]],
         pixel_to_micron_ratio: float,
+        min_fovea_ga_dist_px: float = 10.0,
     ) -> Dict[str, float]:
         """
         Calculate the shortest distance from fovea to a GA region.
+
+        Args:
+            fovea_x, fovea_y: Fovea coordinates.
+            ga_region: List of (x, y) contour points defining the GA boundary.
+            pixel_to_micron_ratio: µm per pixel conversion factor.
+            min_fovea_ga_dist_px: Minimum plausible GA-to-fovea distance in pixels.
+                Contour points closer than this are ignored; they most likely result
+                from a segmentation error where the GA mask bleeds into the fovea
+                region. If all points are closer than this threshold (e.g. a
+                near-foveal case), the global minimum is returned unchanged.
         """
         self._validate_distance_inputs(ga_region, pixel_to_micron_ratio)
 
@@ -47,9 +58,29 @@ class DistanceCalculatorService:
         ga_points = np.asarray(ga_region, dtype=np.float64)
 
         distances = np.linalg.norm(ga_points - fovea_pt, axis=1)
-        min_idx = int(np.argmin(distances))
-        min_distance_pixels = float(distances[min_idx])
-        nearest_point = ga_points[min_idx]
+
+        # Prefer GA boundary points that are at a clinically plausible distance.
+        # Points within min_fovea_ga_dist_px are likely segmentation artefacts
+        # (e.g. the mask extended into the foveal pit).
+        valid_mask = distances >= min_fovea_ga_dist_px
+        if valid_mask.any():
+            valid_distances = distances[valid_mask]
+            valid_points = ga_points[valid_mask]
+            min_idx = int(np.argmin(valid_distances))
+            min_distance_pixels = float(valid_distances[min_idx])
+            nearest_point = valid_points[min_idx]
+        else:
+            # All points are within the exclusion zone — fall back to global minimum
+            # (this can legitimately happen for near-foveal GA).
+            min_idx = int(np.argmin(distances))
+            min_distance_pixels = float(distances[min_idx])
+            nearest_point = ga_points[min_idx]
+            logger.warning(
+                "All GA contour points within %.0f px of fovea (%.0f, %.0f); "
+                "returning unconstrained minimum %.1f px",
+                min_fovea_ga_dist_px, fovea_x, fovea_y, min_distance_pixels,
+            )
+
         min_distance_microns = min_distance_pixels * pixel_to_micron_ratio
 
         logger.debug(

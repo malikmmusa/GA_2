@@ -337,30 +337,28 @@ class DiscDetectorService:
             Dictionary with disc coordinates and metadata
         """
         # -------------------------------------------------------------------------
-        # Improved Algorithm: Percentile-Based Threshold + Weighted Centroid
+        # Algorithm: Percentile-Based Threshold + Weighted Centroid
+        # Height is extracted from pixel extents and corrected by an empirically
+        # calibrated factor (0.866) to remove the systematic overestimation caused
+        # by diffuse activation tails in the regression heatmap.
         # -------------------------------------------------------------------------
-        
+
         hm_h, hm_w = heatmap.shape
-        # Method 1: 98th percentile threshold (much tighter - only keep brightest ~2% of pixels)
-        # The 95th percentile was still too permissive, leading to over-segmentation
-        threshold_percentile = 98.0
-        threshold_value = np.percentile(heatmap, threshold_percentile)
-        
-        # Create binary mask
+
+        # 98th-percentile threshold keeps only the brightest ~2% of pixels
+        threshold_value = np.percentile(heatmap, 98.0)
         binary_mask = (heatmap > threshold_value).astype(np.uint8)
-        
+
         # Connected component analysis
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-            binary_mask, 
-            connectivity=8
+            binary_mask, connectivity=8
         )
-        
+
         if num_labels <= 1:
-            # No components found (only background) - fallback to argmax with lower percentile
+            # Fallback to 90th percentile
             threshold_value_fallback = np.percentile(heatmap, 90.0)
             binary_mask_fallback = (heatmap > threshold_value_fallback).astype(np.uint8)
-            
-            # If still no pixels, use argmax
+
             if np.sum(binary_mask_fallback) == 0:
                 py_raw, px_raw = np.unravel_index(np.argmax(heatmap), heatmap.shape)
                 min_y_raw = py_raw
@@ -368,36 +366,21 @@ class DiscDetectorService:
                 cx_raw = px_raw
                 logger.warning("No components found, using argmax fallback")
             else:
-                # Extract coordinates from fallback mask
                 y_indices, x_indices = np.where(binary_mask_fallback > 0)
                 min_y_raw = np.min(y_indices)
                 max_y_raw = np.max(y_indices)
-                
-                # Weighted centroid for X
                 weights = heatmap[binary_mask_fallback > 0]
                 cx_raw = np.average(x_indices, weights=weights)
-                
                 logger.debug("Using 90th percentile fallback: %s pixels", len(y_indices))
         else:
-            # Find largest component (excluding background label 0)
-            areas = stats[1:, cv2.CC_STAT_AREA]  # Skip background
-            largest_component_idx = np.argmax(areas) + 1  # +1 to account for skipping background
-            
-            # Extract mask for largest component
+            areas = stats[1:, cv2.CC_STAT_AREA]
+            largest_component_idx = np.argmax(areas) + 1
             component_mask = (labels == largest_component_idx).astype(np.uint8)
-            
-            # Get actual pixel coordinates (not bounding box)
             y_indices, x_indices = np.where(component_mask > 0)
-            
-            # Y-extent: actual min/max of pixels in component
             min_y_raw = np.min(y_indices)
             max_y_raw = np.max(y_indices)
-            
-            # X coordinate: weighted centroid (more accurate than bbox center)
             weights = heatmap[component_mask > 0]
             cx_raw = np.average(x_indices, weights=weights)
-            
-            # Debug logging
             num_pixels = len(y_indices)
             bbox_h = stats[largest_component_idx, cv2.CC_STAT_HEIGHT]
             logger.debug(

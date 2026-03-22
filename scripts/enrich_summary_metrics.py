@@ -53,7 +53,7 @@ def compute_cyan_coverage_ratio(comparison_path: Path) -> float:
     h, w = img.shape[:2]
     left = img[:, : w // 2]
     b, g, r = left[:, :, 0], left[:, :, 1], left[:, :, 2]
-    cyan = (b < 120) & (g > 200) & (r > 200)
+        cyan = (b > 200) & (g > 200) & (r < 120)
     n = left.size // 3
     if n == 0:
         return float("nan")
