@@ -68,7 +68,21 @@ class RETFound_UNet(nn.Module):
         
         # Final output layer
         self.final_conv = nn.Conv2d(64, num_classes, kernel_size=1)
-        
+
+        # --------------------------------------------------------
+        # 3. Height Regression Head (operates on bottleneck)
+        # --------------------------------------------------------
+        # Input: (B, 1024, 14, 14) -> Output: (B, 1) normalized height in [0, 1]
+        self.height_head = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(1024, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(256, 1),
+            nn.Sigmoid(),
+        )
+
     def _load_retfound_weights(self, weights_path):
         """Loads RETFound weights from a checkpoint file."""
         try:
@@ -92,45 +106,87 @@ class RETFound_UNet(nn.Module):
         except Exception as e:
             print(f"Error loading weights: {e}")
 
-    def forward(self, x):
+    def forward(self, x, predict_height=False):
         """
         Args:
             x: (B, 3, H, W) input image.
-            
+            predict_height: If True, also return normalized disc height from the
+                height regression head. Default False for backward compatibility.
+
         Returns:
             heatmap: (B, 1, H, W) predicted heatmap in [0, 1].
+            height_normalized (only when predict_height=True): (B, 1) in [0, 1].
         """
         # 1. Encoder
-        # timm forward_features returns (B, N, C)
         x_enc = self.encoder.forward_features(x)
-        
+
         # Remove CLS token if present
         if hasattr(self.encoder, 'cls_token') and self.encoder.cls_token is not None:
             x_enc = x_enc[:, 1:, :]
-            
+
         # Reshape to spatial grid (B, C, H/P, W/P)
         B, N, C = x_enc.shape
         H_grid = int(np.sqrt(N))
         W_grid = int(np.sqrt(N))
-        # Ensure contiguous before reshape to avoid MPS view errors
         x_enc = x_enc.transpose(1, 2).contiguous().reshape(B, C, H_grid, W_grid)
-        
-        # 2. Decoder
+
+        # 2. Height head (operates on bottleneck before decoding)
+        if predict_height:
+            height_normalized = self.height_head(x_enc)
+
+        # 3. Decoder
         d = x_enc
         for up_block in self.decoder_blocks:
             d = up_block(d)
-            
-        # 3. Output Head
+
+        # 4. Output Head
         out = self.final_conv(d)
-        
-        # Sigmoid activation for heatmap regression (0-1 range)
-        return torch.sigmoid(out)
+        heatmap = torch.sigmoid(out)
+
+        if predict_height:
+            return heatmap, height_normalized
+        return heatmap
 
     def unfreeze_encoder(self):
         """Unfreezes encoder for fine-tuning."""
         for param in self.encoder.parameters():
             param.requires_grad = True
         print("Encoder unfrozen.")
+
+    @classmethod
+    def load_pretrained_and_add_height_head(cls, checkpoint_path, img_size=224, num_classes=1):
+        """
+        Instantiate the model and load an existing encoder+decoder checkpoint,
+        leaving height_head randomly initialized.
+
+        Args:
+            checkpoint_path: Path to a checkpoint that contains encoder/decoder
+                             keys but NOT height_head keys.
+            img_size: Input image size (default 224).
+            num_classes: Number of output heatmap channels (default 1).
+
+        Returns:
+            model: RETFound_UNet instance with encoder+decoder loaded and
+                   height_head randomly initialized.
+        """
+        model = cls(img_size=img_size, num_classes=num_classes, weights_path=None, freeze_encoder=False)
+
+        print(f"Loading checkpoint from {checkpoint_path}...")
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+
+        if 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+        elif 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        elif 'model' in checkpoint:
+            state_dict = checkpoint['model']
+        else:
+            state_dict = checkpoint
+
+        msg = model.load_state_dict(state_dict, strict=False)
+        print(f"Checkpoint loaded (strict=False): {msg}")
+        print("height_head remains randomly initialized.")
+        return model
 
 
 class UpBlock(nn.Module):
@@ -205,14 +261,29 @@ def get_coordinates_from_heatmap(heatmap):
 
 # Example Usage
 if __name__ == "__main__":
-    # Test instantiation
     try:
         model = RETFound_UNet(img_size=224)
+        model.eval()
         print("Model created successfully.")
-        
+
+        x = torch.randn(2, 3, 224, 224)
+
+        # Backward-compatible path: returns only heatmap
+        heatmap = model(x)
+        assert heatmap.shape == (2, 1, 224, 224), f"Unexpected heatmap shape: {heatmap.shape}"
+        print(f"[predict_height=False] heatmap: {heatmap.shape}  ✓")
+
+        # New path: returns (heatmap, height)
+        heatmap2, height = model(x, predict_height=True)
+        assert heatmap2.shape == (2, 1, 224, 224), f"Unexpected heatmap shape: {heatmap2.shape}"
+        assert height.shape == (2, 1), f"Unexpected height shape: {height.shape}"
+        print(f"[predict_height=True]  heatmap: {heatmap2.shape}, height: {height.shape}  ✓")
+
         # Test Heatmap Generation
         hm = HeatmapGenerator(112, 112, 224, 224, sigma=20)
         print(f"Heatmap generated. Max value: {hm.max():.4f}")
-        
+
+        print("All smoke tests passed.")
     except Exception as e:
         print(f"Error: {e}")
+        raise
