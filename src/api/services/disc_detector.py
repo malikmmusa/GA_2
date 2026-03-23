@@ -139,7 +139,6 @@ class DiscDetectorService:
                 model = RETFound_UNet.load_pretrained_and_add_height_head(
                     chosen_path, freeze_encoder=False
                 )
-                self.has_height_head = True
                 logger.info("Loaded v2 model with height head on %s", self.device)
             else:
                 model = RETFound_UNet(
@@ -157,6 +156,8 @@ class DiscDetectorService:
 
             model.to(self.device)
             model.eval()
+            if use_v2:
+                self.has_height_head = True
             return model
         except Exception as exc:
             logger.warning("Failed to load model (%s). Using fallback mode.", exc)
@@ -456,6 +457,10 @@ class DiscDetectorService:
         ):
             disc_height_pixels = height_from_model
             logger.debug("Using model height head: %.1f px", disc_height_pixels)
+            disc_center_y_ef = (pred_min_y_ef + pred_max_y_ef) / 2
+            orig_min_y = disc_center_y_ef - disc_height_pixels / 2
+            orig_max_y = disc_center_y_ef + disc_height_pixels / 2
+            pred_y_orig = (orig_min_y + orig_max_y) / 2
         else:
             disc_height_pixels = max(heatmap_height, 1.0)
             if height_from_model is not None:
