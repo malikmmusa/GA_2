@@ -135,7 +135,7 @@ class DiscHeightDataset(Dataset):
 # Transforms
 # ---------------------------------------------------------------------------
 def build_transforms(img_size: int):
-    kp_params = A.KeypointParams(format='xy', remove_outside=False)
+    kp_params = A.KeypointParams(format='xy', remove_invisible=False)
 
     train_transform = A.Compose([
         A.Resize(img_size, img_size),
