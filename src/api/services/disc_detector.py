@@ -99,37 +99,64 @@ class DiscDetectorService:
             return False
 
     def _load_model(self) -> Optional["RETFound_UNet"]:
-        """Load the RETFound U-Net model with trained weights."""
+        """Load the RETFound U-Net model with trained weights.
+
+        Tries v2 checkpoint (with height head) first; falls back to v1.
+        Sets self.has_height_head accordingly.
+        """
+        self.has_height_head = False
+
         if torch is None:
             logger.warning("Torch is not installed. Using fallback mode.")
             return None
 
-        if not os.path.exists(self.model_path):
+        weights_dir = Path(self.model_path).parent
+        v2_path = str(weights_dir / "best_disc_model_v2.pth")
+
+        # Resolve which checkpoint to load
+        if os.path.exists(v2_path):
+            chosen_path = v2_path
+            use_v2 = True
+        elif os.path.exists(self.model_path):
+            chosen_path = self.model_path
+            use_v2 = False
+        else:
             url = os.environ.get("DISC_MODEL_URL")
             if url:
                 self._download_weights(url)
-            if not os.path.exists(self.model_path):
+            if os.path.exists(self.model_path):
+                chosen_path = self.model_path
+                use_v2 = False
+            else:
                 logger.warning("Model weights not found at %s. Using fallback mode.", self.model_path)
                 return None
 
         try:
             from src.models.retfound_unet import RETFound_UNet
 
-            logger.info("Loading model from %s...", self.model_path)
-            model = RETFound_UNet(
-                img_size=self.img_size,
-                weights_path=None,
-                freeze_encoder=False
-            )
-            state_dict = torch.load(
-                self.model_path,
-                map_location=self.device,
-                weights_only=False
-            )
-            model.load_state_dict(state_dict)
+            logger.info("Loading model from %s...", chosen_path)
+            if use_v2:
+                model = RETFound_UNet.load_pretrained_and_add_height_head(
+                    chosen_path, freeze_encoder=False
+                )
+                self.has_height_head = True
+                logger.info("Loaded v2 model with height head on %s", self.device)
+            else:
+                model = RETFound_UNet(
+                    img_size=self.img_size,
+                    weights_path=None,
+                    freeze_encoder=False
+                )
+                state_dict = torch.load(
+                    chosen_path,
+                    map_location=self.device,
+                    weights_only=False
+                )
+                model.load_state_dict(state_dict)
+                logger.info("Loaded v1 model on %s", self.device)
+
             model.to(self.device)
             model.eval()
-            logger.info("Model loaded on %s", self.device)
             return model
         except Exception as exc:
             logger.warning("Failed to load model (%s). Using fallback mode.", exc)
@@ -287,8 +314,14 @@ class DiscDetectorService:
         input_tensor = augmented['image'].unsqueeze(0).to(self.device)  # [1, 3, 224, 224]
 
         # Step 3: Inference
+        height_from_model: Optional[float] = None
         with torch.no_grad():
-            output = self.model(input_tensor)  # [1, 1, 224, 224]
+            if self.has_height_head:
+                output, height_tensor = self.model(input_tensor, predict_height=True)
+                height_normalized = height_tensor.cpu().item()
+                height_from_model = height_normalized * h_ef
+            else:
+                output = self.model(input_tensor)  # [1, 1, 224, 224]
             heatmap = output.cpu().squeeze().numpy()  # [224, 224]
 
         # Step 4: Extract Coordinates using "New Algorithm"
@@ -297,6 +330,7 @@ class DiscDetectorService:
             en_face_width=w_ef,
             en_face_height=h_ef,
             en_face_split_x=en_face_split_x,
+            height_from_model=height_from_model,
         )
         coords['image_format'] = image_format
         return coords
@@ -306,7 +340,8 @@ class DiscDetectorService:
         heatmap: np.ndarray,
         en_face_width: int,
         en_face_height: int,
-        en_face_split_x: int
+        en_face_split_x: int,
+        height_from_model: Optional[float] = None,
     ) -> Dict[str, float]:
         """
         Extract disc coordinates using an improved robust algorithm.
@@ -413,8 +448,22 @@ class DiscDetectorService:
         pred_x_orig = orig_cx
         pred_y_orig = (orig_min_y + orig_max_y) / 2
         
-        # Calculate disc height and pixel-to-micron ratio
-        disc_height_pixels = max(float(orig_max_y - orig_min_y), 1.0)
+        # Calculate disc height: prefer direct model output when plausible
+        heatmap_height = float(orig_max_y - orig_min_y)
+        if (
+            height_from_model is not None
+            and 50.0 < height_from_model < 0.6 * en_face_height
+        ):
+            disc_height_pixels = height_from_model
+            logger.debug("Using model height head: %.1f px", disc_height_pixels)
+        else:
+            disc_height_pixels = max(heatmap_height, 1.0)
+            if height_from_model is not None:
+                logger.debug(
+                    "Model height %.1f px out of plausible range; using heatmap height %.1f px",
+                    height_from_model,
+                    disc_height_pixels,
+                )
         pixel_to_micron_ratio = DISC_DIAMETER_MICRONS / disc_height_pixels
         
         logger.debug("Disc detected at (%.1f, %.1f)", pred_x_orig, pred_y_orig)
