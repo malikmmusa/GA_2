@@ -42,3 +42,9 @@ src/eval_*.py
 tmp/
 temp/
 output_results/
+
+# Training data (large, sourced from Backups)
+data/training/
+
+# Validation outputs
+test_validation_v2/
