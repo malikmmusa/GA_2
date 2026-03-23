@@ -175,8 +175,13 @@ class DiscLoss(nn.Module):
 # ---------------------------------------------------------------------------
 # Train / validate one epoch
 # ---------------------------------------------------------------------------
-def train_one_epoch(model, loader, optimizer, criterion, device):
+def train_one_epoch(model, loader, optimizer, criterion, device, phase1_frozen_backbone=False):
     model.train()
+    if phase1_frozen_backbone:
+        model.encoder.eval()
+        model.decoder_blocks.eval()
+        model.final_conv.eval()
+        model.height_head.train()
     total_loss = hmap_loss_sum = height_loss_sum = 0.0
 
     for batch in loader:
@@ -332,6 +337,11 @@ def main():
     for param in model.height_head.parameters():
         param.requires_grad = True
 
+    model.encoder.eval()
+    model.decoder_blocks.eval()
+    model.final_conv.eval()
+    model.height_head.train()
+
     trainable_p1 = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Trainable params (Phase 1): {trainable_p1:,}")
 
@@ -346,8 +356,10 @@ def main():
     best_p1_loss = float('inf')
 
     for epoch in range(1, CONFIG['phase1_epochs'] + 1):
-        tr_loss, tr_hmap, tr_h = train_one_epoch(model, train_loader, optimizer_p1,
-                                                  criterion, device)
+        tr_loss, tr_hmap, tr_h = train_one_epoch(
+            model, train_loader, optimizer_p1, criterion, device,
+            phase1_frozen_backbone=True,
+        )
         val_loss, val_hmap, val_h_mae, val_center = validate(model, val_loader,
                                                               criterion, device)
 
@@ -372,6 +384,10 @@ def main():
             break
 
     print(f"Phase 1 complete. Best val loss: {best_p1_loss:.5f}\n")
+
+    print("Loading best Phase 1 weights before Phase 2...")
+    phase1_ckpt = torch.load(CONFIG['phase1_save_path'], map_location=device)
+    model.load_state_dict(phase1_ckpt['model_state_dict'])
 
     # ==================================================================
     # Phase 2: Unfreeze everything, differential LRs
