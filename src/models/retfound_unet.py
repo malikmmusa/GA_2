@@ -154,7 +154,9 @@ class RETFound_UNet(nn.Module):
         print("Encoder unfrozen.")
 
     @classmethod
-    def load_pretrained_and_add_height_head(cls, checkpoint_path, img_size=224, num_classes=1):
+    def load_pretrained_and_add_height_head(
+        cls, checkpoint_path, img_size=224, num_classes=1, freeze_encoder: bool = False
+    ):
         """
         Instantiate the model and load an existing encoder+decoder checkpoint,
         leaving height_head randomly initialized.
@@ -164,12 +166,19 @@ class RETFound_UNet(nn.Module):
                              keys but NOT height_head keys.
             img_size: Input image size (default 224).
             num_classes: Number of output heatmap channels (default 1).
+            freeze_encoder: If True, freeze encoder parameters (same as ``__init__``
+                default). Default False so encoder can train with the new head.
 
         Returns:
             model: RETFound_UNet instance with encoder+decoder loaded and
                    height_head randomly initialized.
         """
-        model = cls(img_size=img_size, num_classes=num_classes, weights_path=None, freeze_encoder=False)
+        model = cls(
+            img_size=img_size,
+            num_classes=num_classes,
+            weights_path=None,
+            freeze_encoder=freeze_encoder,
+        )
 
         print(f"Loading checkpoint from {checkpoint_path}...")
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
@@ -182,6 +191,9 @@ class RETFound_UNet(nn.Module):
             state_dict = checkpoint['model']
         else:
             state_dict = checkpoint
+
+        if state_dict and all(k.startswith("module.") for k in state_dict.keys()):
+            state_dict = {k[len("module."):]: v for k, v in state_dict.items()}
 
         msg = model.load_state_dict(state_dict, strict=False)
         print(f"Checkpoint loaded (strict=False): {msg}")
