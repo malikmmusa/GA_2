@@ -153,13 +153,13 @@ class FoveaDetectorService:
                 )
                 fovea_x, fovea_y = rx, ry
                 eye_side = retry_eye_side
-                detection_method = detection_method + "_retry"
+                detection_method = detection_method  # retry succeeded; keep base method
             else:
                 # Both sides failed — fall back to en-face center Y, disc Y as coords
                 en_face_center_fallback_x = en_face_split_x + en_face_width / 2.0
                 fovea_x = en_face_center_fallback_x
                 fovea_y = disc_center_y
-                detection_method = detection_method + "_center_fallback"
+                detection_method = "geometric_fallback"
                 logger.warning(
                     "%s: both eye sides failed validation; using en-face center fallback (%.0f, %.0f)",
                     image_name, fovea_x, fovea_y,

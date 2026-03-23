@@ -197,7 +197,8 @@ class RETFound_UNet(nn.Module):
 
         msg = model.load_state_dict(state_dict, strict=False)
         print(f"Checkpoint loaded (strict=False): {msg}")
-        print("height_head remains randomly initialized.")
+        if msg.missing_keys:
+            print(f"height_head not in checkpoint — randomly initialized ({len(msg.missing_keys)} missing keys).")
         return model
 
 

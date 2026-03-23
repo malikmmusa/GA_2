@@ -105,6 +105,7 @@ class DiscDetectorService:
         Sets self.has_height_head accordingly.
         """
         self.has_height_head = False
+        self.loaded_model_path: Optional[str] = None
 
         if torch is None:
             logger.warning("Torch is not installed. Using fallback mode.")
@@ -158,6 +159,7 @@ class DiscDetectorService:
             model.eval()
             if use_v2:
                 self.has_height_head = True
+            self.loaded_model_path = chosen_path
             return model
         except Exception as exc:
             logger.warning("Failed to load model (%s). Using fallback mode.", exc)
