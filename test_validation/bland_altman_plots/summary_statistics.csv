@@ -1,0 +1,57 @@
+Metric,Value
+--- Assisted (click-anchored) vs Manual ---
+N (distance pairs),42
+"Bias (method−Manual, µm)",-96.15
+SD of differences (µm),455.23
+95% LOA lower (µm),-988.40
+95% LOA upper (µm),796.11
+95% CI bias lower (µm),-238.00
+95% CI bias upper (µm),45.71
+MAE (µm),333.03
+RMSE (µm),459.94
+Pearson r,0.434
+Pearson r 95% CI,"[0.150, 0.652]"
+Pearson p-value,0.0040
+"ICC(2,1) absolute agreement",0.417
+ICC 95% CI,"[0.136, 0.637]"
+Proportional bias slope,0.2770
+Proportional bias p-value,0.1649
+Proportional bias R²,0.0476
+
+--- Autonomous (no-click) vs Manual ---
+N (distance pairs),41
+"Bias (method−Manual, µm)",-551.40
+SD of differences (µm),434.32
+95% LOA lower (µm),-1402.67
+95% LOA upper (µm),299.87
+95% CI bias lower (µm),-688.49
+95% CI bias upper (µm),-414.31
+MAE (µm),556.70
+RMSE (µm),698.62
+Pearson r,-0.188
+Pearson r 95% CI,"[-0.468, 0.127]"
+Pearson p-value,0.2397
+"ICC(2,1) absolute agreement",0.000
+ICC 95% CI,"[0.000, -0.279]"
+Proportional bias slope,-1.7148
+Proportional bias p-value,0.0000
+Proportional bias R²,0.5730
+
+"Error decomposition (mean |contribution|, µm)"
+Disc calibration,24.82
+Fovea localization,267.21
+GA boundary,157.77
+
+Disc calibration sub-analysis
+N training,21
+N validation,21
+Correction factor,0.9821
+Uncalibrated MAE (µm),320.65
+Calibrated MAE (µm),317.29
+MAE improvement (µm),3.37
+MAE improvement (%),1.0
+
+Component-level statistics
+Disc height (px),n=52 MAE=16.14 RMSE=20.66 median=13.22
+Fovea (px),n=52 MAE=75.91 RMSE=95.71 median=63.21
+GA point (px),n=42 MAE=58.39 RMSE=74.43 median=44.13

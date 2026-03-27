@@ -155,15 +155,84 @@ class FoveaDetectorService:
                 eye_side = retry_eye_side
                 detection_method = detection_method  # retry succeeded; keep base method
             else:
-                # Both sides failed — fall back to en-face center Y, disc Y as coords
-                en_face_center_fallback_x = en_face_split_x + en_face_width / 2.0
-                fovea_x = en_face_center_fallback_x
-                fovea_y = disc_center_y
+                # Both sides failed validation — use a geometric estimate (disc_x ±
+                # 2.5*disc_h) clamped to the en-face region.  Try both OD and OS
+                # candidate positions; for each that falls within the image (not
+                # clamped to the edge), sample the local mean intensity.  The foveal
+                # pit is characteristically darker than surrounding retina, so the
+                # darker valid candidate is picked.  If only one candidate is within
+                # bounds, or intensities are tied, fall back to the heuristic eye_side.
+                est_x_od = disc_center_x + (2.5 * disc_height_pixels)
+                est_x_os = disc_center_x - (2.5 * disc_height_pixels)
+                fallback_y = float(np.clip(est_y, 0, height - 1))
+
+                # A candidate is "valid" if its raw estimate lies within the en-face
+                # region with at least a 50-px margin from each side (enough for the
+                # 11-px sampling window and to exclude black background at image edges).
+                ef_left = float(en_face_split_x) + 50.0
+                ef_right = float(width) - 50.0
+                od_valid = ef_left <= est_x_od <= ef_right
+                os_valid = ef_left <= est_x_os <= ef_right
+
+                def _local_intensity(x: float, y: float) -> float:
+                    """Mean grayscale intensity in an 11×11 neighbourhood."""
+                    import cv2 as _cv2
+                    ef_img = image[:, en_face_split_x:, :]
+                    lx = int(np.clip(x - en_face_split_x, 5, ef_img.shape[1] - 6))
+                    ly = int(np.clip(y, 5, ef_img.shape[0] - 6))
+                    patch = ef_img[ly - 5:ly + 6, lx - 5:lx + 6]
+                    gray = _cv2.cvtColor(patch, _cv2.COLOR_BGR2GRAY) if patch.ndim == 3 else patch
+                    return float(np.mean(gray))
+
+                if od_valid and os_valid:
+                    intens_od = _local_intensity(est_x_od, fallback_y)
+                    intens_os = _local_intensity(est_x_os, fallback_y)
+                    # Minimum tissue intensity threshold: black background (scan edge)
+                    # has ~0 intensity and must not beat a genuine tissue region.
+                    MIN_TISSUE_INT = 15.0
+                    od_tissue = intens_od >= MIN_TISSUE_INT
+                    os_tissue = intens_os >= MIN_TISSUE_INT
+                    if od_tissue and os_tissue:
+                        # Both are real tissue; pick the darker (more pit-like)
+                        if intens_od <= intens_os:
+                            fovea_x, chosen_side = float(np.clip(est_x_od, ef_left, ef_right)), "OD"
+                        else:
+                            fovea_x, chosen_side = float(np.clip(est_x_os, ef_left, ef_right)), "OS"
+                    elif od_tissue:
+                        fovea_x, chosen_side = float(np.clip(est_x_od, ef_left, ef_right)), "OD"
+                    elif os_tissue:
+                        fovea_x, chosen_side = float(np.clip(est_x_os, ef_left, ef_right)), "OS"
+                    else:
+                        # Neither is tissue; fall back to heuristic eye_side
+                        fovea_x = float(np.clip(est_x, en_face_split_x, width - 1))
+                        chosen_side = eye_side
+                    logger.warning(
+                        "%s: both sides failed; darker-side fallback (%.0f, %.0f)"
+                        " side=%s [OD_int=%.1f OS_int=%.1f]",
+                        image_name, fovea_x, fallback_y, chosen_side, intens_od, intens_os,
+                    )
+                elif od_valid:
+                    fovea_x, chosen_side = float(np.clip(est_x_od, ef_left, ef_right)), "OD"
+                    logger.warning(
+                        "%s: both sides failed; OD-only fallback (%.0f, %.0f)",
+                        image_name, fovea_x, fallback_y,
+                    )
+                elif os_valid:
+                    fovea_x, chosen_side = float(np.clip(est_x_os, ef_left, ef_right)), "OS"
+                    logger.warning(
+                        "%s: both sides failed; OS-only fallback (%.0f, %.0f)",
+                        image_name, fovea_x, fallback_y,
+                    )
+                else:
+                    # Both out of bounds — keep original est_x from heuristic eye_side
+                    fovea_x = float(np.clip(est_x, en_face_split_x, width - 1))
+                    chosen_side = eye_side
+                    logger.warning(
+                        "%s: both sides failed + both OOB; heuristic fallback (%.0f, %.0f)",
+                        image_name, fovea_x, fallback_y,
+                    )
+                fovea_y = fallback_y
                 detection_method = "geometric_fallback"
-                logger.warning(
-                    "%s: both eye sides failed validation; using en-face center fallback (%.0f, %.0f)",
-                    image_name, fovea_x, fovea_y,
-                )
 
         return {
             'fovea_x': float(fovea_x),

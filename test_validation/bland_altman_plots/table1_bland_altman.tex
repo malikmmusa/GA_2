@@ -1,0 +1,44 @@
+\begin{table}[h]
+\centering
+\caption{Agreement Between Automated and Manual GA-to-Fovea Distance Measurements}
+\label{tab:bland-altman}
+\begin{tabular}{lll}
+\hline
+\textbf{Metric} & \textbf{Value} & \textbf{Unit} \\
+\hline
+\multicolumn{3}{l}{\textit{Assisted (clinician click + DL segmentation) vs Manual}} \\
+\hline
+N (distance pairs) & 42 & images \\
+Bias (method$-$Manual) & -96.1 & µm \\
+SD of differences & 455.2 & µm \\
+95\% LoA & [-988.4,\ 796.1] & µm \\
+MAE & 333.0 & µm \\
+RMSE & 459.9 & µm \\
+Pearson r & 0.434 [95\%CI 0.150, 0.652] & (p=0.004) \\
+ICC(2,1) & 0.417 [95\%CI 0.136, 0.637] & \\
+Proportional bias slope & 0.277 & (p=0.165) \\
+\hline
+\multicolumn{3}{l}{\textit{Autonomous (fully automated, no click) vs Manual}} \\
+\hline
+N (distance pairs) & 41 & images \\
+Bias (method$-$Manual) & -551.4 & µm \\
+SD of differences & 434.3 & µm \\
+95\% LoA & [-1402.7,\ 299.9] & µm \\
+MAE & 556.7 & µm \\
+RMSE & 698.6 & µm \\
+Pearson r & -0.188 [95\%CI -0.468, 0.127] & (p=0.240) \\
+ICC(2,1) & 0.000 [95\%CI 0.000, -0.279] & \\
+Proportional bias slope & -1.715 & (p=0.000) \\
+\hline
+\multicolumn{3}{l}{\textit{Error decomposition (mean |contribution|)}} \\
+Disc calibration & 24.8 & µm \\
+Fovea localization & 267.2 & µm \\
+GA boundary & 157.8 & µm \\
+\hline
+\multicolumn{3}{l}{\textit{Disc calibration sub-analysis}} \\
+Correction factor & 0.982 & (train n=21) \\
+Uncalibrated MAE & 320.7 & µm \\
+Calibrated MAE & 317.3 & µm \\
+\hline
+\end{tabular}
+\end{table}

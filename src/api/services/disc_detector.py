@@ -38,17 +38,22 @@ class DiscDetectorService:
         model_path: str = "weights/best_disc_model.pth",
         img_size: int = 224,
         device: Optional[str] = None,
+        force_version: Optional[str] = None,
     ):
         """
         Initialize the disc detector service.
         
         Args:
-            model_path: Path to trained model weights
+            model_path: Path to trained model weights (v1 checkpoint)
             img_size: Input size for model (224x224)
             device: Device to run inference on (auto-detect if None)
+            force_version: Override auto-detection. "v1" loads only best_disc_model.pth,
+                "v2" loads only best_disc_model_v2.pth. None (default) uses auto-detect
+                (v2 if present, else v1).
         """
         self.img_size = img_size
         self.model_path = model_path
+        self.force_version = force_version
         
         # Auto-detect device
         if device is None:
@@ -75,9 +80,9 @@ class DiscDetectorService:
                 ToTensorV2()
             ])
     
-    def _download_weights(self, url: str) -> bool:
+    def _download_weights(self, url: str, dest_path: Optional[str] = None) -> bool:
         """Download model weights from a URL, streaming to disk."""
-        dest = Path(self.model_path)
+        dest = Path(dest_path) if dest_path else Path(self.model_path)
         dest.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = dest.with_suffix(".tmp")
         logger.info("Downloading disc model weights from %s ...", url)
@@ -101,7 +106,8 @@ class DiscDetectorService:
     def _load_model(self) -> Optional["RETFound_UNet"]:
         """Load the RETFound U-Net model with trained weights.
 
-        Tries v2 checkpoint (with height head) first; falls back to v1.
+        Respects self.force_version ("v1", "v2", or None for auto-detect).
+        When force_version is None, tries v2 checkpoint first; falls back to v1.
         Sets self.has_height_head accordingly.
         """
         self.has_height_head = False
@@ -115,17 +121,36 @@ class DiscDetectorService:
         v2_path = str(weights_dir / "best_disc_model_v2.pth")
 
         # Resolve which checkpoint to load
-        if os.path.exists(v2_path):
+        if self.force_version == "v1":
+            if not os.path.exists(self.model_path):
+                logger.warning("V1 weights not found at %s. Using fallback mode.", self.model_path)
+                return None
+            chosen_path = self.model_path
+            use_v2 = False
+        elif self.force_version == "v2":
+            if not os.path.exists(v2_path):
+                logger.warning("V2 weights not found at %s. Using fallback mode.", v2_path)
+                return None
+            chosen_path = v2_path
+            use_v2 = True
+        elif os.path.exists(v2_path):
             chosen_path = v2_path
             use_v2 = True
         elif os.path.exists(self.model_path):
             chosen_path = self.model_path
             use_v2 = False
         else:
-            url = os.environ.get("DISC_MODEL_URL")
-            if url:
-                self._download_weights(url)
-            if os.path.exists(self.model_path):
+            # Try v2 first (preferred), then fall back to v1
+            url_v2 = os.environ.get("DISC_MODEL_URL_V2")
+            if url_v2 and not os.path.exists(v2_path):
+                self._download_weights(url_v2, dest_path=v2_path)
+            url_v1 = os.environ.get("DISC_MODEL_URL")
+            if url_v1 and not os.path.exists(self.model_path):
+                self._download_weights(url_v1)
+            if os.path.exists(v2_path):
+                chosen_path = v2_path
+                use_v2 = True
+            elif os.path.exists(self.model_path):
                 chosen_path = self.model_path
                 use_v2 = False
             else:
@@ -152,7 +177,14 @@ class DiscDetectorService:
                     map_location=self.device,
                     weights_only=False
                 )
-                model.load_state_dict(state_dict)
+                # strict=False: V1 checkpoints predate the height_head and lack
+                # those keys; the head remains randomly initialised but is
+                # never used when has_height_head=False.
+                missing, unexpected = model.load_state_dict(state_dict, strict=False)
+                if missing:
+                    logger.debug("V1 load – missing keys (expected): %s", missing)
+                if unexpected:
+                    logger.warning("V1 load – unexpected keys: %s", unexpected)
                 logger.info("Loaded v1 model on %s", self.device)
 
             model.to(self.device)
