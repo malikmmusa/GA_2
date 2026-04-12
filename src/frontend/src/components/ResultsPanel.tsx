@@ -58,6 +58,12 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
             <p><span className="font-medium">Date:</span> {formatDate(imageBefore.date)}</p>
             <p><span className="font-medium">Eye:</span> {imageBefore.fovea?.eye_side}</p>
             <p><span className="font-medium">Distance:</span> {imageBefore.distance.distance_microns.toFixed(1)} µm</p>
+            <p className="font-mono text-xs text-gray-500">
+              Fovea: ({imageBefore.fovea?.fovea_x.toFixed(1)}, {imageBefore.fovea?.fovea_y.toFixed(1)}) px
+            </p>
+            <p className="font-mono text-xs text-gray-500">
+              GA: ({imageBefore.distance.nearest_ga_point_x.toFixed(1)}, {imageBefore.distance.nearest_ga_point_y.toFixed(1)}) px
+            </p>
           </div>
         </div>
 
@@ -68,6 +74,12 @@ export const ResultsPanel: React.FC<ResultsPanelProps> = ({
             <p><span className="font-medium">Date:</span> {formatDate(imageAfter.date)}</p>
             <p><span className="font-medium">Eye:</span> {imageAfter.fovea?.eye_side}</p>
             <p><span className="font-medium">Distance:</span> {imageAfter.distance.distance_microns.toFixed(1)} µm</p>
+            <p className="font-mono text-xs text-gray-500">
+              Fovea: ({imageAfter.fovea?.fovea_x.toFixed(1)}, {imageAfter.fovea?.fovea_y.toFixed(1)}) px
+            </p>
+            <p className="font-mono text-xs text-gray-500">
+              GA: ({imageAfter.distance.nearest_ga_point_x.toFixed(1)}, {imageAfter.distance.nearest_ga_point_y.toFixed(1)}) px
+            </p>
           </div>
         </div>
       </div>

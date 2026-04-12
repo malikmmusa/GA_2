@@ -961,9 +961,16 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
             </>
           )}
           {imageAnalysis.distance && (
-            <p className="text-sm font-semibold text-blue-600">
-              Distance: {imageAnalysis.distance.distance_microns.toFixed(1)} µm
-            </p>
+            <>
+              <p className="text-sm font-semibold text-blue-600">
+                Distance: {imageAnalysis.distance.distance_microns.toFixed(1)} µm
+              </p>
+              <p className="text-xs text-gray-500 font-mono">
+                Fovea: ({imageAnalysis.fovea?.fovea_x.toFixed(1)}, {imageAnalysis.fovea?.fovea_y.toFixed(1)}) px
+                {' | '}
+                GA: ({imageAnalysis.distance.nearest_ga_point_x.toFixed(1)}, {imageAnalysis.distance.nearest_ga_point_y.toFixed(1)}) px
+              </p>
+            </>
           )}
         </div>
       )}
