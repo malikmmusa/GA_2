@@ -6,9 +6,10 @@ Workflow:
 1) Launch local backend/frontend.
 2) For each input image group:
    - Upload before + after (or duplicate before for single-image cases).
-   - Set fovea clicks from raw_marked annotations when available.
+   - Adjust optic disc bracket handles to match ground-truth position (before fovea confirm).
+   - Set fovea clicks from raw_marked annotations (exact pixel from ground truth).
    - Confirm both foveas, trigger GA segmentation.
-   - Click GA endpoint (furthest yellow-line endpoint from fovea) when available.
+   - Click "Manual" button, then click the exact GA endpoint from ground truth.
 3) Capture canvas screenshots, crop en-face, and export side-by-side with raw_marked en-face.
 
 Output:
@@ -54,6 +55,8 @@ class ImageMeta:
     split_x: int
     fovea_xy: Optional[Tuple[float, float]]
     ga_target_xy: Optional[Tuple[float, float]]
+    # Ground-truth disc: (center_x, top_y, bottom_y) in original image pixels
+    disc_gt: Optional[Tuple[float, float, float]] = None
 
 
 @dataclass
@@ -282,18 +285,25 @@ def detect_fovea_marker(
     return best
 
 
-def extract_landmarks(input_path: Path, raw_path: Optional[Path]) -> Tuple[int, Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+def extract_landmarks(
+    input_path: Path,
+    raw_path: Optional[Path],
+) -> Tuple[int, Optional[Tuple[float, float]], Optional[Tuple[float, float]], Optional[Tuple[float, float, float]]]:
+    """
+    Returns (split_x, fovea_xy, ga_target_xy, disc_gt).
+    disc_gt is (center_x, top_y, bottom_y) or None.
+    """
     image = cv2.imread(str(input_path))
     if image is None:
         raise ValueError(f"Failed to read {input_path}")
 
     split_x = compute_split_x(image)
     if raw_path is None or not raw_path.exists():
-        return split_x, None, None
+        return split_x, None, None, None
 
     marked = cv2.imread(str(raw_path))
     if marked is None or marked.shape[:2] != image.shape[:2]:
-        return split_x, None, None
+        return split_x, None, None, None
 
     diff = cv2.absdiff(marked, image)
     # Keep only strong annotation deltas (prevents drift from subtle compression differences)
@@ -301,11 +311,11 @@ def extract_landmarks(input_path: Path, raw_path: Optional[Path]) -> Tuple[int, 
 
     line_endpoints = detect_peach_line_endpoints(marked, diff_mask, split_x)
     if line_endpoints is None:
-        return split_x, None, None
+        return split_x, None, None, None
 
     fovea = detect_fovea_marker(marked, diff_mask, line_endpoints, split_x)
     if fovea is None:
-        return split_x, None, None
+        return split_x, None, None, None
 
     ga_target: Optional[Tuple[float, float]] = None
     p1, p2 = line_endpoints
@@ -315,7 +325,9 @@ def extract_landmarks(input_path: Path, raw_path: Optional[Path]) -> Tuple[int, 
     far = p1 if d1 > d2 else p2
     ga_target = (float(far[0]), float(far[1]))
 
-    return split_x, fovea, ga_target
+    disc_gt = detect_disc_from_red(marked, diff_mask)
+
+    return split_x, fovea, ga_target, disc_gt
 
 
 def prepare_image_meta(input_dir: Path, raw_dir: Path) -> Dict[str, ImageMeta]:
@@ -329,7 +341,7 @@ def prepare_image_meta(input_dir: Path, raw_dir: Path) -> Dict[str, ImageMeta]:
         if img is None:
             raise ValueError(f"Failed to read {path}")
 
-        split_x, fovea_xy, ga_target_xy = extract_landmarks(path, raw_path)
+        split_x, fovea_xy, ga_target_xy, disc_gt = extract_landmarks(path, raw_path)
         meta[path.name] = ImageMeta(
             filename=path.name,
             input_path=path,
@@ -339,6 +351,7 @@ def prepare_image_meta(input_dir: Path, raw_dir: Path) -> Dict[str, ImageMeta]:
             split_x=split_x,
             fovea_xy=fovea_xy,
             ga_target_xy=ga_target_xy,
+            disc_gt=disc_gt,
         )
     return meta
 
@@ -421,6 +434,103 @@ def click_image_point(canvas: Locator, image_xy: Tuple[float, float], img_w: int
     rel_x = float(np.clip(rel_x, 1.0, max(1.0, box["width"] - 1.0)))
     rel_y = float(np.clip(rel_y, 1.0, max(1.0, box["height"] - 1.0)))
     canvas.click(position={"x": rel_x, "y": rel_y}, force=True)
+
+
+def drag_image_point(
+    page: "Page",
+    canvas: "Locator",
+    from_xy: Tuple[float, float],
+    to_xy: Tuple[float, float],
+    img_w: int,
+    img_h: int,
+    steps: int = 15,
+) -> None:
+    """Simulate a mouse drag on the canvas between two image-coordinate points."""
+    box = canvas.bounding_box()
+    if box is None:
+        raise RuntimeError("Canvas bounding box unavailable for drag")
+
+    def to_page(xy: Tuple[float, float]) -> Tuple[float, float]:
+        px = box["x"] + float(xy[0]) / img_w * box["width"]
+        py = box["y"] + float(xy[1]) / img_h * box["height"]
+        px = float(np.clip(px, box["x"] + 1, box["x"] + box["width"] - 1))
+        py = float(np.clip(py, box["y"] + 1, box["y"] + box["height"] - 1))
+        return px, py
+
+    sx, sy = to_page(from_xy)
+    ex, ey = to_page(to_xy)
+    page.mouse.move(sx, sy)
+    page.mouse.down()
+    # Smooth drag in small steps so React motion handlers fire
+    for i in range(1, steps + 1):
+        t = i / steps
+        page.mouse.move(sx + (ex - sx) * t, sy + (ey - sy) * t)
+    page.mouse.up()
+
+
+def adjust_disc_to_ground_truth(
+    page: "Page",
+    canvas: "Locator",
+    meta: ImageMeta,
+    auto_disc: Dict[str, float],
+) -> None:
+    """
+    Drag the disc bracket handles to match ground-truth positions.
+
+    auto_disc must contain keys: disc_center_x, disc_top_y, disc_bottom_y.
+    meta.disc_gt must be (gt_center_x, gt_top_y, gt_bottom_y).
+    """
+    if meta.disc_gt is None:
+        return
+
+    gt_cx, gt_top, gt_bottom = meta.disc_gt
+    auto_cx = auto_disc["disc_center_x"]
+    auto_top = auto_disc["disc_top_y"]
+    auto_bottom = auto_disc["disc_bottom_y"]
+
+    # Drag top handle to ground-truth top (keep center_x from GT)
+    drag_image_point(
+        page, canvas,
+        from_xy=(auto_cx, auto_top),
+        to_xy=(gt_cx, gt_top),
+        img_w=meta.width,
+        img_h=meta.height,
+    )
+    # Small settle pause so React state updates before next drag
+    page.wait_for_timeout(150)
+
+    # Drag bottom handle to ground-truth bottom
+    drag_image_point(
+        page, canvas,
+        from_xy=(auto_cx, auto_bottom),
+        to_xy=(gt_cx, gt_bottom),
+        img_w=meta.width,
+        img_h=meta.height,
+    )
+    page.wait_for_timeout(150)
+
+
+def select_distance_manual(
+    page: "Page",
+    canvas: "Locator",
+    manual_button: "Locator",
+    meta: ImageMeta,
+    target_xy: Tuple[float, float],
+) -> bool:
+    """
+    Click the Manual button to enter manual GA mode, then click the exact
+    ground-truth GA endpoint.  Returns True on success.
+    """
+    try:
+        manual_button.click(timeout=10000)
+    except Exception:
+        return False
+
+    # Small pause for state transition
+    page.wait_for_timeout(300)
+
+    click_image_point(canvas, target_xy, meta.width, meta.height)
+    return True
 
 
 def decode_png_bytes(png_bytes: bytes) -> np.ndarray:
@@ -660,6 +770,22 @@ def select_distance_for_panel(
     return False
 
 
+def _fetch_auto_disc(image_path: Path, api_base: str = "http://127.0.0.1:8000") -> Optional[Dict[str, float]]:
+    """Call the backend detect-disc endpoint and return the auto-detected disc dict."""
+    try:
+        with open(image_path, "rb") as fh:
+            resp = requests.post(
+                f"{api_base}/api/detect-disc",
+                files={"file": (image_path.name, fh, "image/png")},
+                timeout=30,
+            )
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as exc:
+        print(f"    detect-disc API call failed for {image_path.name}: {exc}")
+    return None
+
+
 def process_case(page: Page, case: Case, meta: Dict[str, ImageMeta], output_dir: Path) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
 
@@ -683,14 +809,31 @@ def process_case(page: Page, case: Case, meta: Dict[str, ImageMeta], output_dir:
     file_inputs.nth(0).set_input_files(str(before.input_path))
     file_inputs.nth(1).set_input_files(str(after.input_path))
 
-    # Wait until both foveas exist and unified confirm button appears.
+    # Wait until auto-detection completes and the unified confirm button appears.
     wait_for_button(page, "Confirm Fovea on Both Images & Continue")
 
     canvases = page.locator("canvas")
     before_canvas = canvases.nth(0)
     after_canvas = canvases.nth(1)
 
-    # Align fovea with raw_marked target when available.
+    # --- DISC ADJUSTMENT (before fovea confirmation; dragging is locked after) ---
+    if before_eligible and before.disc_gt is not None:
+        auto_disc = _fetch_auto_disc(before.input_path)
+        if auto_disc is not None:
+            print(f"    Adjusting disc for {before.filename}")
+            adjust_disc_to_ground_truth(page, before_canvas, before, auto_disc)
+        else:
+            print(f"    Skipping disc adjustment for {before.filename} (API unavailable)")
+
+    if after_eligible and after.disc_gt is not None and case.after_filename is not None:
+        auto_disc = _fetch_auto_disc(after.input_path)
+        if auto_disc is not None:
+            print(f"    Adjusting disc for {after.filename}")
+            adjust_disc_to_ground_truth(page, after_canvas, after, auto_disc)
+        else:
+            print(f"    Skipping disc adjustment for {after.filename} (API unavailable)")
+
+    # --- FOVEA PLACEMENT ---
     if before_eligible and before.fovea_xy is not None:
         click_image_point(before_canvas, before.fovea_xy, before.width, before.height)
     if after_eligible and after.fovea_xy is not None:
@@ -698,38 +841,56 @@ def process_case(page: Page, case: Case, meta: Dict[str, ImageMeta], output_dir:
 
     wait_for_button(page, "Confirm Fovea on Both Images & Continue").click()
 
-    # Wait for GA mode.
-    page.get_by_role("button", name="Select Manually").first.wait_for(state="visible", timeout=120000)
+    # --- GA SELECTION: wait for Manual button (confirms GA segmentation is done) ---
+    # The button label is "Manual" (not "Select Manually" which no longer exists).
+    manual_buttons = page.get_by_role("button", name="Manual")
+    manual_buttons.first.wait_for(state="visible", timeout=120000)
 
     before_selected = False
     after_selected = False
     expected_count = 0
 
     if before_eligible and before.ga_target_xy is not None:
-        expected_count += 1
-        before_selected = select_distance_for_panel(
+        # Manual GA mode: click "Manual" button for before panel (index 0), then click exact point
+        before_selected = select_distance_manual(
             page=page,
             canvas=before_canvas,
+            manual_button=manual_buttons.nth(0),
             meta=before,
             target_xy=before.ga_target_xy,
-            expected_distance_count=expected_count,
         )
-        if not before_selected:
-            expected_count -= 1
-            print(f"  SKIP image {before.filename}: GA auto-selection failed at yellow endpoint")
+        if before_selected:
+            expected_count += 1
+            try:
+                wait_for_distances(page, expected_count=expected_count, timeout_s=8.0)
+            except TimeoutError:
+                # Distance renders synchronously in React; timeout means the point fell outside the enface region
+                expected_count -= 1
+                before_selected = False
+                print(f"  SKIP image {before.filename}: manual GA point did not produce a distance")
+        else:
+            print(f"  SKIP image {before.filename}: Manual button click failed")
 
     if after_eligible and after.ga_target_xy is not None:
-        expected_count += 1
-        after_selected = select_distance_for_panel(
+        # For the after panel the Manual button is the second one (index 1 or 0 if before skipped)
+        after_manual_idx = 1 if before_selected else 0
+        after_selected = select_distance_manual(
             page=page,
             canvas=after_canvas,
+            manual_button=manual_buttons.nth(after_manual_idx),
             meta=after,
             target_xy=after.ga_target_xy,
-            expected_distance_count=expected_count,
         )
-        if not after_selected:
-            expected_count -= 1
-            print(f"  SKIP image {after.filename}: GA auto-selection failed at yellow endpoint")
+        if after_selected:
+            expected_count += 1
+            try:
+                wait_for_distances(page, expected_count=expected_count, timeout_s=8.0)
+            except TimeoutError:
+                expected_count -= 1
+                after_selected = False
+                print(f"  SKIP image {after.filename}: manual GA point did not produce a distance")
+        else:
+            print(f"  SKIP image {after.filename}: Manual button click failed")
 
     before_canvas_img = decode_png_bytes(before_canvas.screenshot())
     after_canvas_img = decode_png_bytes(after_canvas.screenshot())
