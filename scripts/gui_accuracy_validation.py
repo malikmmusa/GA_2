@@ -633,9 +633,9 @@ def _detect_gui_predicted_ga_point(
         return None
 
     d2 = (xs - fovea_gui_x) ** 2 + (ys - fovea_gui_y) ** 2
-    nearest_idx = int(np.argmin(d2))
-    pred_gui_x = float(xs[nearest_idx])
-    pred_gui_y = float(ys[nearest_idx])
+    farthest_idx = int(np.argmax(d2))
+    pred_gui_x = float(xs[farthest_idx])
+    pred_gui_y = float(ys[farthest_idx])
 
     pred_local_x = pred_gui_x * (enface_width_orig / float(max(1, ef_w)))
     pred_local_y = pred_gui_y * (meta.height / float(max(1, gui_h)))
