@@ -80,6 +80,32 @@ class DiscDetectorService:
                 ToTensorV2()
             ])
     
+    def _remote_file_size(self, url: str) -> Optional[int]:
+        """HEAD-request the remote URL and return Content-Length, or None on failure."""
+        try:
+            req = urllib.request.Request(url, method="HEAD")
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                cl = resp.headers.get("Content-Length")
+                return int(cl) if cl else None
+        except Exception:
+            return None
+
+    def _needs_redownload(self, url: str, local_path: str) -> bool:
+        """Return True if the local file is absent or differs in size from the remote."""
+        if not os.path.exists(local_path):
+            return True
+        remote_size = self._remote_file_size(url)
+        if remote_size is None:
+            return False
+        local_size = os.path.getsize(local_path)
+        if remote_size != local_size:
+            logger.info(
+                "Remote weights size (%d B) differs from local (%d B) — will re-download",
+                remote_size, local_size,
+            )
+            return True
+        return False
+
     def _download_weights(self, url: str, dest_path: Optional[str] = None) -> bool:
         """Download model weights from a URL, streaming to disk."""
         dest = Path(dest_path) if dest_path else Path(self.model_path)
@@ -120,6 +146,23 @@ class DiscDetectorService:
         weights_dir = Path(self.model_path).parent
         v2_path = str(weights_dir / "best_disc_model_v2.pth")
 
+        url_v2 = os.environ.get("DISC_MODEL_URL_V2")
+        url_v1 = os.environ.get("DISC_MODEL_URL")
+        force_redownload = os.environ.get("DISC_MODEL_FORCE_REDOWNLOAD", "").lower() in (
+            "1", "true", "yes",
+        )
+
+        # Sync local weights with remote: re-download when the remote file
+        # changed (size mismatch) or DISC_MODEL_FORCE_REDOWNLOAD is set.
+        if url_v2:
+            if force_redownload or self._needs_redownload(url_v2, v2_path):
+                logger.info("Updating v2 weights from remote...")
+                self._download_weights(url_v2, dest_path=v2_path)
+        if url_v1:
+            if force_redownload or self._needs_redownload(url_v1, self.model_path):
+                logger.info("Updating v1 weights from remote...")
+                self._download_weights(url_v1)
+
         # Resolve which checkpoint to load
         if self.force_version == "v1":
             if not os.path.exists(self.model_path):
@@ -140,22 +183,8 @@ class DiscDetectorService:
             chosen_path = self.model_path
             use_v2 = False
         else:
-            # Try v2 first (preferred), then fall back to v1
-            url_v2 = os.environ.get("DISC_MODEL_URL_V2")
-            if url_v2 and not os.path.exists(v2_path):
-                self._download_weights(url_v2, dest_path=v2_path)
-            url_v1 = os.environ.get("DISC_MODEL_URL")
-            if url_v1 and not os.path.exists(self.model_path):
-                self._download_weights(url_v1)
-            if os.path.exists(v2_path):
-                chosen_path = v2_path
-                use_v2 = True
-            elif os.path.exists(self.model_path):
-                chosen_path = self.model_path
-                use_v2 = False
-            else:
-                logger.warning("Model weights not found at %s. Using fallback mode.", self.model_path)
-                return None
+            logger.warning("Model weights not found at %s. Using fallback mode.", self.model_path)
+            return None
 
         try:
             from src.models.retfound_unet import RETFound_UNet

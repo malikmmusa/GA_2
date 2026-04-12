@@ -29,5 +29,7 @@ Atrophy Advisor is a two-service app: Python/FastAPI backend (port 8000) + React
 - **Disc model weights**: The disc detector auto-downloads weights on first startup from Hugging Face env vars. Without them, disc detection falls back to a geometric heuristic (center of en-face, 30-70% height) which is completely wrong for real scans.
  - Set `DISC_MODEL_URL_V2=https://huggingface.co/malikmmusa/Atrophy_Advisor/resolve/main/best_disc_model_v2.pth` — v2 is preferred and loaded automatically when present.
  - Set `DISC_MODEL_URL=https://huggingface.co/malikmmusa/Atrophy_Advisor/resolve/main/best_disc_model.pth` — v1 fallback if v2 is unavailable.
- - Add a Railway volume mounted at `/app/weights` so the 1.25 GB files persist across restarts and are only downloaded once.
+ - **Auto-update**: On each startup the service compares local file size against the remote (HEAD request). If the remote file changed, it re-downloads automatically — no need to clear the volume.
+ - Set `DISC_MODEL_FORCE_REDOWNLOAD=1` to force re-download regardless of size match (useful after uploading a same-size checkpoint). Remove the var after one successful deploy.
+ - Add a Railway volume mounted at `/app/weights` so the files persist across restarts.
  - Verify the model loaded by checking `GET /api/disc-detector/status`.
