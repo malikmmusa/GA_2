@@ -34,6 +34,7 @@ class GASegmenterService:
         clahe_clip_limit: float = 3.0,
         morph_kernel_size: int = 11,
         use_sam: bool = True,
+        max_click_dist_fraction: float = 0.15,
     ):
         """
         Initialize GA segmentation service.
@@ -48,6 +49,10 @@ class GASegmenterService:
             clahe_clip_limit: CLAHE clip limit (default: 3.0)
             morph_kernel_size: Morphological operations kernel size (default: 11)
             use_sam: Whether to refine K-means contours with SAM2 (default: True)
+            max_click_dist_fraction: In local (click-driven) segmentation, reject
+                candidate contours that the click falls outside of by more than
+                this fraction of the crop radius. Clicks inside a contour are
+                never rejected (default: 0.15)
         """
         self.n_clusters = n_clusters
         self.min_area = min_area
@@ -58,6 +63,7 @@ class GASegmenterService:
         self.clahe_clip_limit = clahe_clip_limit
         self.morph_kernel_size = morph_kernel_size
         self.use_sam = use_sam
+        self.max_click_dist_fraction = max_click_dist_fraction
         self._sam = SAMRefiner() if use_sam else None
         # Keep top-N bright clusters to reduce failure when true GA is not brightest.
         self.top_cluster_count = min(max(1, n_clusters), 2)
@@ -654,6 +660,14 @@ class GASegmenterService:
 
         crop_area = (x2 - x1) * (y2 - y1)
         max_area_local = int(0.65 * crop_area)  # cap at 65% of crop; watershed splits blobs earlier
+        # Proximity gate. The cluster fallback below walks every cluster in the
+        # crop, so without a bound it can return a contour from a cluster with no
+        # intensity relation to the click (e.g. a CLAHE edge artifact hundreds of
+        # grey levels away). Candidates that the click falls this far outside are
+        # not GA at the click and are dropped outright. The click may legitimately
+        # sit just outside the contour — ground truth marks the GA *edge* — so the
+        # gate bounds that gap rather than requiring containment.
+        max_click_dist_local = self.max_click_dist_fraction * crop_radius
         min_area_local = 100
         kernel_size_local = 5
         kernel = np.ones((kernel_size_local, kernel_size_local), np.uint8)
@@ -696,7 +710,7 @@ class GASegmenterService:
                 logger.debug("GA-local cluster %s: no contours after morphology", candidate_cluster)
                 continue
 
-            # Filter: min area, max area cap, circularity
+            # Filter: min area, max area cap, circularity, proximity to click
             valid_contours = []
             for cnt in contours_crop:
                 area = cv2.contourArea(cnt)
@@ -710,7 +724,18 @@ class GASegmenterService:
                 circularity = 4 * np.pi * (area / (perimeter * perimeter))
                 if circularity > self.max_circularity:
                     continue
-                valid_contours.append(cnt)
+                # Gate on how far *outside* the contour the click falls. A click
+                # inside a region scores 0, so large lesions clicked near their
+                # centre are never penalised for being far from their own edge.
+                signed = cv2.pointPolygonTest(cnt, (int(click_x_crop), int(click_y_crop)), True)
+                outside_dist = max(0.0, -float(signed))
+                if outside_dist > max_click_dist_local:
+                    continue
+                pts = cnt.reshape(-1, 2)
+                nearest_click_dist = float(
+                    np.min(np.sqrt(np.sum((pts - click_pt_crop) ** 2, axis=1)))
+                )
+                valid_contours.append((cnt, nearest_click_dist, signed))
 
             if not valid_contours:
                 logger.debug("GA-local cluster %s: no valid contours after filtering", candidate_cluster)
@@ -729,14 +754,8 @@ class GASegmenterService:
                 fpt = np.array([fovea_local_x, fovea_local_y], dtype=np.float64)
                 return float(np.min(np.linalg.norm(pts - fpt, axis=1)))
 
-            click_pt_local = (int(click_x_crop), int(click_y_crop))
             clean_contours_with_meta = []
-            for cnt in valid_contours:
-                dist_to_click = cv2.pointPolygonTest(cnt, click_pt_local, True)
-                pts = cnt.reshape(-1, 2)
-                nearest_click_dist = float(
-                    np.min(np.sqrt(np.sum((pts - click_pt_crop) ** 2, axis=1)))
-                )
+            for cnt, nearest_click_dist, dist_to_click in valid_contours:
                 near_fovea = _nearest_to_fovea(cnt) < min_fovea_ga_dist_px
                 contains_click = dist_to_click >= 0
                 clean_contours_with_meta.append((cnt, contains_click, nearest_click_dist, near_fovea))
