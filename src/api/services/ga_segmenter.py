@@ -29,7 +29,7 @@ class GASegmenterService:
         min_area: int = 500,
         max_circularity: float = 0.8,
         relative_area_threshold: float = 0.1,
-        max_regions: Optional[int] = None,
+        max_regions: Optional[int] = 8,
         disc_exclusion_multiplier: float = 0.6,
         clahe_clip_limit: float = 3.0,
         morph_kernel_size: int = 11,
@@ -72,6 +72,14 @@ class GASegmenterService:
         self.max_region_fraction = 0.30
         self.border_margin_px = 3
         self.border_reject_area_fraction = 0.025
+        # Absolute min_area (500 px) is ~0.015% of a typical en-face, small
+        # enough to admit speckle. This floor scales with image size and sits
+        # just below the smallest observed true lesion (0.09% of en-face).
+        self.min_area_fraction = 0.0008
+        # Log-normal size prior over lesion area as a fraction of the en-face,
+        # fitted to regions that land on the ground-truth GA edge.
+        self.ga_area_fraction_center = 0.014
+        self.ga_area_fraction_log_sigma = 1.6
     
     def _apply_clahe(self, gray: np.ndarray) -> np.ndarray:
         """
@@ -150,16 +158,18 @@ class GASegmenterService:
     
     def _score_region_anatomy_aware(self,
                                     contour: np.ndarray,
-                                    image_shape: Tuple[int, int],
-                                    fovea_pos: Optional[Tuple[float, float]] = None) -> float:
+                                    image_shape: Tuple[int, int]) -> float:
         """
         Score a GA region based on anatomical likelihood.
-        
+
+        Deliberately takes no fovea argument: this score feeds region ranking,
+        and ranking must stay independent of the fovea for the fovea-to-GA
+        distance to be a measurement rather than a restatement of the prior.
+
         Args:
             contour: OpenCV contour
             image_shape: (height, width) of en-face image
-            fovea_pos: (x, y) of fovea in local coordinates
-            
+
         Returns:
             Anatomical likelihood score (higher = more likely)
         """
@@ -190,23 +200,72 @@ class GASegmenterService:
             macular_score = 0.0
         
         score *= (0.5 + 0.5 * macular_score)  # Blend with baseline
-        
-        # Fovea-aware scoring (if fovea provided, prefer regions closer to it)
-        if fovea_pos is not None:
-            dist_from_fovea = np.sqrt((cx - fovea_pos[0])**2 + (cy - fovea_pos[1])**2)
-            
-            # Clinically relevant GA is within ~2000-3000 microns of fovea
-            # Normalize by image size as proxy
-            if dist_from_fovea < 0.2 * image_diagonal:
-                fovea_score = 1.0
-            elif dist_from_fovea < 0.4 * image_diagonal:
-                fovea_score = 1.0 - (dist_from_fovea - 0.2 * image_diagonal) / (0.2 * image_diagonal)
-            else:
-                fovea_score = 0.1
-            
-            score *= (0.7 + 0.3 * fovea_score)
-        
+
         return score
+
+    def _score_region_size(self, area: float, image_area: float) -> float:
+        """Score a region by how closely its size matches a real GA lesion.
+
+        Measured over the validation set: regions that actually sit on the
+        ground-truth GA edge occupy a median 1.4% of the en-face (10th-90th
+        percentile 0.09%-5.2%), whereas the median returned candidate occupies
+        0.06% — i.e. most candidates are speckle, smaller than any true lesion.
+
+        Scored log-normally, since lesion area spans two orders of magnitude.
+        """
+        if area <= 0 or image_area <= 0:
+            return 0.0
+        fraction = area / image_area
+        log_ratio = np.log(fraction / self.ga_area_fraction_center)
+        return float(np.exp(-0.5 * (log_ratio / self.ga_area_fraction_log_sigma) ** 2))
+
+    def _score_region_appearance(
+        self,
+        enhanced: np.ndarray,
+        contour: np.ndarray,
+    ) -> float:
+        """Score a region on whether it *looks* like atrophy.
+
+        GA on en-face OCT is a window defect: loss of RPE lets more choroidal
+        signal through, so the lesion reads brighter than the retina around it
+        and is sharply demarcated. Both cues are computed against the region's
+        own local surround rather than a global threshold, which keeps the score
+        stable across scans with different overall brightness.
+        """
+        h, w = enhanced.shape[:2]
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(mask, [contour], -1, 255, thickness=cv2.FILLED)
+
+        # Surround = a ring just outside the lesion, excluding the lesion itself.
+        ring_width = max(5, int(0.02 * np.sqrt(h * w)))
+        kernel = np.ones((ring_width, ring_width), np.uint8)
+        surround = cv2.dilate(mask, kernel, iterations=2)
+        surround = cv2.subtract(surround, mask)
+
+        inside = enhanced[mask > 0]
+        outside = enhanced[surround > 0]
+        if inside.size == 0 or outside.size == 0:
+            return 0.0
+
+        # Contrast: how much brighter the lesion is than its surround, in units
+        # of the surround's own spread. ~2 SD is a confident window defect.
+        spread = float(np.std(outside)) + 1e-6
+        contrast = (float(np.mean(inside)) - float(np.mean(outside))) / spread
+        contrast_score = float(np.clip(contrast / 2.0, 0.0, 1.0))
+
+        # Demarcation: mean gradient magnitude along the boundary, normalised
+        # against the image's own gradient scale.
+        grad_x = cv2.Sobel(enhanced, cv2.CV_32F, 1, 0, ksize=3)
+        grad_y = cv2.Sobel(enhanced, cv2.CV_32F, 0, 1, ksize=3)
+        grad_mag = cv2.magnitude(grad_x, grad_y)
+        edge = cv2.morphologyEx(mask, cv2.MORPH_GRADIENT, np.ones((3, 3), np.uint8))
+        edge_vals = grad_mag[edge > 0]
+        if edge_vals.size == 0:
+            return contrast_score
+        reference = float(np.percentile(grad_mag, 90)) + 1e-6
+        edge_score = float(np.clip(float(np.mean(edge_vals)) / reference, 0.0, 1.0))
+
+        return 0.6 * contrast_score + 0.4 * edge_score
 
     def _extract_cluster_contours(
         self,
@@ -370,7 +429,7 @@ class GASegmenterService:
             area = cv2.contourArea(cnt)
             
             # 1. Size Filter
-            if area < self.min_area:
+            if area < max(self.min_area, self.min_area_fraction * image_area):
                 continue
             
             # 2. Circularity Filter (reject circles - likely blood vessels or disc)
@@ -401,53 +460,39 @@ class GASegmenterService:
             if touch_count >= 2 and area > self.border_reject_area_fraction * image_area:
                 continue
             
-            # 4. Anatomy-aware scoring
-            anatomy_score = self._score_region_anatomy_aware(
-                cnt, gray.shape, fovea_local
-            )
+            # 4. Scoring.
+            #
+            # Design rule: no term here may depend on the fovea position.
+            # The measurand is the fovea-to-GA distance, so any term favouring
+            # regions at a particular distance from the fovea makes the output a
+            # function of the prior rather than the image. The previous version
+            # scored candidates against `target_dist_norm = 0.10` of the image
+            # diagonal, which drove the autonomous measurement to a near-constant
+            # value (Bland-Altman difference-vs-mean slope -2.06, r = -0.34,
+            # ICC = 0.000 on the holdout).
+            #
+            # What remains is evidence about the region itself: is it lesion-sized,
+            # does it look like a window defect, and is it in the macula.
+            anatomy_score = self._score_region_anatomy_aware(cnt, gray.shape)
+            size_score = self._score_region_size(area, image_area)
+            appearance_score = self._score_region_appearance(enhanced, cnt)
 
             rank = cluster_rank_map.get(cluster_idx, 0)
             intensity_prior = max(0.70, 1.0 - 0.15 * rank)
-            selection_score = anatomy_score * intensity_prior
+            selection_score = (
+                (0.40 * size_score)
+                + (0.35 * appearance_score)
+                + (0.25 * anatomy_score)
+            ) * intensity_prior
 
+            # Retained for diagnostics only — never used for ranking.
             if fovea_local is not None:
-                signed_dist = cv2.pointPolygonTest(
+                boundary_dist = abs(float(cv2.pointPolygonTest(
                     cnt, (float(fovea_local[0]), float(fovea_local[1])), True
-                )
-                boundary_dist = abs(float(signed_dist))
-                normalized_dist = boundary_dist / max(image_diagonal, 1e-6)
-                contains_fovea = signed_dist >= 0
-
-                # Prefer clinically plausible boundary distance from fovea.
-                if contains_fovea:
-                    fovea_edge_score = 0.0
-                elif normalized_dist < 0.012:
-                    fovea_edge_score = 0.2
-                elif normalized_dist <= 0.14:
-                    fovea_edge_score = 1.0
-                elif normalized_dist <= 0.40:
-                    fovea_edge_score = max(0.1, 1.0 - (normalized_dist - 0.14) / 0.26)
-                else:
-                    fovea_edge_score = 0.1
-
-                target_dist_norm = 0.10
-                distance_alignment = max(
-                    0.0,
-                    1.0 - abs(normalized_dist - target_dist_norm) / 0.25
-                )
-                selection_score = (
-                    (0.50 * anatomy_score)
-                    + (0.35 * fovea_edge_score)
-                    + (0.15 * distance_alignment)
-                ) * intensity_prior
-
-                # Contours enclosing the fovea are usually anatomically implausible for GA target.
-                if contains_fovea and area > 0.01 * image_area:
-                    selection_score *= 0.4
+                )))
             else:
                 boundary_dist = float("nan")
 
-            # Store with score
             candidates.append((cnt, area, selection_score, boundary_dist))
         
         if not candidates:
@@ -456,19 +501,21 @@ class GASegmenterService:
         # Sort by composite score first, then area.
         candidates.sort(key=lambda x: (x[2], x[1]), reverse=True)
         
-        # Size-based filtering (relative to largest)
+        # Size-based filtering, relative to the largest surviving region.
+        # Previously this bound was loosened to 2% of image area whenever a fovea
+        # was supplied, which made it weaker rather than stronger and let ~98
+        # regions through per image on average. Because the caller takes the
+        # minimum distance over every returned region, each extra speckle could
+        # only pull the measurement toward zero.
         largest_area = candidates[0][1]
         threshold_area = self.relative_area_threshold * largest_area
-        # Avoid over-pruning clinically plausible smaller lesions when a giant contour dominates.
-        if fovea_local is not None:
-            threshold_area = min(threshold_area, 0.02 * image_area)
-        
         final_candidates = [(c, a, s, d) for c, a, s, d in candidates if a >= threshold_area]
-        if fovea_local is not None:
-            final_candidates = [(c, a, s, d) for c, a, s, d in final_candidates if s >= 0.15]
-            if not final_candidates:
-                final_candidates = [candidates[0]]
-        
+
+        # Drop candidates the evidence does not support at all.
+        supported = [(c, a, s, d) for c, a, s, d in final_candidates if s >= 0.15]
+        final_candidates = supported or [candidates[0]]
+
+
         # Apply max_regions limit if specified
         if self.max_regions is not None:
             final_candidates = final_candidates[:self.max_regions]
