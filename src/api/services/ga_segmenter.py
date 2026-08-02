@@ -44,7 +44,9 @@ class GASegmenterService:
             min_area: Minimum contour area in pixels (default: 500)
             max_circularity: Maximum circularity to filter out circular objects (default: 0.8)
             relative_area_threshold: Keep regions >= this fraction of largest (default: 0.1)
-            max_regions: Maximum number of regions to return (default: None - return all)
+            max_regions: Maximum number of regions to return (default: 8). Callers
+                that take a minimum over all returned regions degrade as this
+                grows, so returning everything is not a safe default.
             disc_exclusion_multiplier: Disc masking radius multiplier (default: 0.6)
             clahe_clip_limit: CLAHE clip limit (default: 3.0)
             morph_kernel_size: Morphological operations kernel size (default: 11)
