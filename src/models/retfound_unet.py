@@ -9,6 +9,10 @@ try:
 except ImportError:
     warnings.warn("timm is not installed. Please install it using 'pip install timm'")
 
+# Heatmap channel order for the 2-channel (disc + fovea) model.
+DISC_CHANNEL = 0
+FOVEA_CHANNEL = 1
+
 class RETFound_UNet(nn.Module):
     """
     RETFound U-Net for Optic Disc Detection via Heatmap Regression.
@@ -83,6 +87,34 @@ class RETFound_UNet(nn.Module):
             nn.Sigmoid(),
         )
 
+        # --------------------------------------------------------
+        # 4. Fovea Coordinate Head (operates on bottleneck)
+        # --------------------------------------------------------
+        # Input: (B, 1024, 14, 14) -> Output: (B, 2) = (x, y) in [0, 1],
+        # as a fraction of image width/height.
+        #
+        # Direct coordinate regression rather than a second heatmap channel.
+        # With only ~31 training images, heatmap regression for a *new* keypoint
+        # collapses: MSE against a mostly-zero target is minimised by hedging, so
+        # the decoder emits a diffuse blob (peak/mean 5.4 against a target 28.6)
+        # and argmax inside it is close to arbitrary. Sharing the decoder also
+        # made disc localisation worse. A small head on the frozen bottleneck
+        # learns a 2-number output instead, and leaves the disc path untouched by
+        # construction. This mirrors how height_head was added to this model.
+        #
+        # Global pooling discards spatial layout, so this head cannot resolve
+        # fine position — it is a coarse anatomical estimate, which is what the
+        # 76 px heuristic it replaces also is.
+        self.fovea_head = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(1024, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(256, 2),
+            nn.Sigmoid(),
+        )
+
     def _load_retfound_weights(self, weights_path):
         """Loads RETFound weights from a checkpoint file."""
         try:
@@ -106,16 +138,20 @@ class RETFound_UNet(nn.Module):
         except Exception as e:
             print(f"Error loading weights: {e}")
 
-    def forward(self, x, predict_height=False):
+    def forward(self, x, predict_height=False, predict_fovea=False):
         """
         Args:
             x: (B, 3, H, W) input image.
             predict_height: If True, also return normalized disc height from the
                 height regression head. Default False for backward compatibility.
+            predict_fovea: If True, also return normalized fovea (x, y) from the
+                fovea head. Default False for backward compatibility.
 
         Returns:
             heatmap: (B, 1, H, W) predicted heatmap in [0, 1].
             height_normalized (only when predict_height=True): (B, 1) in [0, 1].
+            fovea_xy (only when predict_fovea=True): (B, 2) in [0, 1], as a
+                fraction of image width and height.
         """
         # 1. Encoder
         x_enc = self.encoder.forward_features(x)
@@ -130,9 +166,11 @@ class RETFound_UNet(nn.Module):
         W_grid = int(np.sqrt(N))
         x_enc = x_enc.transpose(1, 2).contiguous().reshape(B, C, H_grid, W_grid)
 
-        # 2. Height head (operates on bottleneck before decoding)
+        # 2. Bottleneck heads (before decoding)
         if predict_height:
             height_normalized = self.height_head(x_enc)
+        if predict_fovea:
+            fovea_xy = self.fovea_head(x_enc)
 
         # 3. Decoder
         d = x_enc
@@ -143,15 +181,83 @@ class RETFound_UNet(nn.Module):
         out = self.final_conv(d)
         heatmap = torch.sigmoid(out)
 
+        outputs = [heatmap]
         if predict_height:
-            return heatmap, height_normalized
-        return heatmap
+            outputs.append(height_normalized)
+        if predict_fovea:
+            outputs.append(fovea_xy)
+        return outputs[0] if len(outputs) == 1 else tuple(outputs)
 
     def unfreeze_encoder(self):
         """Unfreezes encoder for fine-tuning."""
         for param in self.encoder.parameters():
             param.requires_grad = True
         print("Encoder unfrozen.")
+
+    @classmethod
+    def load_pretrained_with_fovea_channel(
+        cls, checkpoint_path, img_size=224, freeze_encoder: bool = False
+    ):
+        """
+        Load a 1-channel (disc-only) checkpoint into a 2-channel model that
+        predicts the disc and the fovea as separate heatmaps.
+
+        Channel order is (DISC_CHANNEL, FOVEA_CHANNEL) = (0, 1).
+
+        The checkpoint's ``final_conv`` is (1, 64, 1, 1); it is widened to
+        (2, 64, 1, 1) by *duplicating* the trained disc filter into the fovea
+        channel rather than initialising it randomly. Everything upstream is
+        shared, and both heads solve the same problem — turn decoder features
+        into one Gaussian blob — so the duplicated filter starts out predicting
+        the disc and only has to learn the offset to the fovea. A random channel
+        would instead start from noise and push large early gradients back
+        through a decoder that is already trained.
+
+        Args:
+            checkpoint_path: Path to a v1/v2 disc checkpoint (1 heatmap channel).
+                A checkpoint that already has 2 channels loads unchanged.
+            img_size: Input image size (default 224).
+            freeze_encoder: If True, freeze encoder parameters. Default False.
+
+        Returns:
+            model: RETFound_UNet with 2 heatmap channels, encoder/decoder/height
+                   head loaded from the checkpoint where present.
+        """
+        model = cls(
+            img_size=img_size,
+            num_classes=2,
+            weights_path=None,
+            freeze_encoder=freeze_encoder,
+        )
+
+        print(f"Loading checkpoint from {checkpoint_path}...")
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+
+        if 'model_state_dict' in checkpoint:
+            state_dict = checkpoint['model_state_dict']
+        elif 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        elif 'model' in checkpoint:
+            state_dict = checkpoint['model']
+        else:
+            state_dict = checkpoint
+
+        if state_dict and all(k.startswith("module.") for k in state_dict.keys()):
+            state_dict = {k[len("module."):]: v for k, v in state_dict.items()}
+
+        state_dict = dict(state_dict)
+        weight = state_dict.get('final_conv.weight')
+        if weight is not None and weight.shape[0] == 1:
+            bias = state_dict['final_conv.bias']
+            state_dict['final_conv.weight'] = torch.cat([weight, weight.clone()], dim=0)
+            state_dict['final_conv.bias'] = torch.cat([bias, bias.clone()], dim=0)
+            print("Widened final_conv 1 -> 2 channels (fovea seeded from disc filter).")
+
+        msg = model.load_state_dict(state_dict, strict=False)
+        print(f"Checkpoint loaded (strict=False): {msg}")
+        if msg.missing_keys:
+            print(f"Randomly initialized: {msg.missing_keys}")
+        return model
 
     @classmethod
     def load_pretrained_and_add_height_head(
