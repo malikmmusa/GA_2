@@ -285,6 +285,38 @@ class GASegmenterService:
         "norm_dist_from_centre",
     )
 
+    # Below this top-region score, the autonomous measurement should not be
+    # reported. Selected on the development eyes as the smallest abstention rate
+    # reaching ICC >= 0.50 there (15%, dev ICC 0.146 -> 0.601). On the frozen
+    # holdout it abstained on 2 of 10 images whose errors were 1058 and 779 um —
+    # the two worst — cutting MAE on what remained from 401 to 272 um. The large
+    # dev ICC gain did *not* replicate on the holdout (0.286 -> 0.242); with 8
+    # retained images ICC is dominated by how much spread removing outliers takes
+    # with them. Treat this as a filter for catastrophic cases, which it
+    # demonstrably is, not as an accuracy improvement on the rest.
+    MIN_CONFIDENT_SCORE = 0.9367
+
+    def measurement_confidence(self, region_scores: List[float]) -> float:
+        """Confidence that a reported fovea-to-GA distance is usable.
+
+        The score of the best candidate region. Of the signals tested against
+        per-image error on the development eyes, this was much the strongest
+        (Spearman rho -0.623), ahead of top-k distance spread (+0.491) and the
+        best region's appearance score (-0.458). Two plausible signals carried
+        essentially nothing: the score margin between the top two regions
+        (+0.019) and the run-to-run spread under different k-means seeds
+        (+0.025) — segmentation instability does not predict measurement error,
+        so there is no reason to pay for repeated inference.
+
+        Returns 0.0 when no region survived filtering, which is itself the
+        clearest possible signal not to report a number.
+        """
+        return float(max(region_scores)) if region_scores else 0.0
+
+    def is_confident(self, region_scores: List[float]) -> bool:
+        """Whether a measurement from these regions should be reported at all."""
+        return self.measurement_confidence(region_scores) >= self.MIN_CONFIDENT_SCORE
+
     def passes_filters(
         self,
         contour: np.ndarray,
@@ -436,8 +468,9 @@ class GASegmenterService:
         disc_height_pixels: Optional[float] = None,
         en_face_split_x: Optional[int] = None,
         fovea_x: Optional[float] = None,
-        fovea_y: Optional[float] = None
-    ) -> List[np.ndarray]:
+        fovea_y: Optional[float] = None,
+        return_confidence: bool = False,
+    ):
         """
         Segment GA regions using single-cluster K-means with texture validation.
         
@@ -449,9 +482,14 @@ class GASegmenterService:
             en_face_split_x: Optional split point to extract en-face region
             fovea_x: Optional fovea X for anatomy-aware scoring
             fovea_y: Optional fovea Y for anatomy-aware scoring
-        
+            return_confidence: If True, return ``(contours, confidence)`` instead
+                of just contours. Confidence below ``MIN_CONFIDENT_SCORE`` means
+                the resulting distance should not be reported — see
+                ``measurement_confidence``. Default False for compatibility.
+
         Returns:
-            List of contours (numpy arrays) representing GA regions
+            List of contours (numpy arrays) representing GA regions, or
+            ``(contours, confidence)`` when ``return_confidence`` is set.
         """
         # Extract en-face region if split point provided
         if en_face_split_x is not None:
@@ -541,7 +579,7 @@ class GASegmenterService:
                 contour_records.append((cnt, int(cluster_idx)))
 
         if not contour_records:
-            return []
+            return ([], 0.0) if return_confidence else []
 
         if self.use_sam and self._sam is not None and self._sam.available:
             boxes = []
@@ -584,8 +622,8 @@ class GASegmenterService:
             candidates.append((cnt, area, selection_score, boundary_dist))
         
         if not candidates:
-            return []
-        
+            return ([], 0.0) if return_confidence else []
+
         # Sort by composite score first, then area.
         candidates.sort(key=lambda x: (x[2], x[1]), reverse=True)
         
@@ -618,7 +656,11 @@ class GASegmenterService:
                 adjusted[:, 0, 0] += en_face_split_x  # Shift X coordinates
                 adjusted_contours.append(adjusted)
             final_contours = adjusted_contours
-        
+
+        if return_confidence:
+            return final_contours, self.measurement_confidence(
+                [s for _, _, s, _ in final_candidates]
+            )
         return final_contours
     
     def segment_ga_local(
