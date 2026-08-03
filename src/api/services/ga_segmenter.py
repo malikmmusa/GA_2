@@ -272,6 +272,136 @@ class GASegmenterService:
 
         return 0.6 * contrast_score + 0.4 * edge_score
 
+    # Feature order is part of this class's contract: any trained ranker is
+    # fitted against these names in this order.
+    FEATURE_NAMES = (
+        "size_score",
+        "appearance_score",
+        "anatomy_score",
+        "intensity_prior",
+        "log_area_fraction",
+        "circularity",
+        "eccentricity",
+        "norm_dist_from_centre",
+    )
+
+    def passes_filters(
+        self,
+        contour: np.ndarray,
+        area: float,
+        image_shape: Tuple[int, int],
+    ) -> Tuple[bool, float]:
+        """Reject candidates that cannot be GA before any scoring happens.
+
+        Returns ``(passed, circularity)``; circularity is returned because it is
+        computed here and is also a scoring feature.
+
+        Shared by `segment_ga_regions` and the offline ranker dataset builder, so
+        a model is never trained on a candidate pool the serving path would have
+        filtered out.
+        """
+        h, w = image_shape
+        image_area = float(h * w)
+
+        # Size: below the smallest plausible lesion (0.08% of en-face) is speckle.
+        if area < max(self.min_area, self.min_area_fraction * image_area):
+            return False, 0.0
+
+        perimeter = cv2.arcLength(contour, True)
+        if perimeter == 0:
+            return False, 0.0
+        circularity = 4 * np.pi * (area / (perimeter * perimeter))
+        # Near-circular blobs are usually vessels or the disc, not atrophy.
+        if circularity > self.max_circularity:
+            return False, circularity
+
+        x, y, w_box, h_box = cv2.boundingRect(contour)
+        if float(w_box * h_box) > self.max_bbox_fraction * image_area:
+            return False, circularity
+        if area > self.max_region_fraction * image_area:
+            return False, circularity
+
+        # A large region touching two or more borders is background, not a lesion.
+        touch_count = sum((
+            x <= self.border_margin_px,
+            y <= self.border_margin_px,
+            (x + w_box) >= (w - self.border_margin_px),
+            (y + h_box) >= (h - self.border_margin_px),
+        ))
+        if touch_count >= 2 and area > self.border_reject_area_fraction * image_area:
+            return False, circularity
+
+        return True, circularity
+
+    def region_features(
+        self,
+        contour: np.ndarray,
+        area: float,
+        circularity: float,
+        enhanced: np.ndarray,
+        image_shape: Tuple[int, int],
+        cluster_rank: int,
+    ) -> Dict[str, float]:
+        """Describe one candidate region for scoring.
+
+        Design rule: **no feature here may depend on the fovea position.** The
+        measurand is the fovea-to-GA distance, so any feature favouring regions
+        at a particular distance from the fovea makes the output a function of
+        the prior rather than of the image. An earlier version scored candidates
+        against `target_dist_norm = 0.10` of the image diagonal and drove the
+        autonomous measurement to a near-constant value (Bland-Altman
+        difference-vs-mean slope -2.06, r = -0.34, ICC = 0.000 on the holdout).
+
+        What remains is evidence about the region itself: is it lesion-sized,
+        does it look like a window defect, and where is it in the macula.
+
+        This is the single definition used both by `score_region` at serving time
+        and by the offline ranker training set, so the two cannot drift apart.
+        """
+        h, w = image_shape
+        image_area = float(h * w)
+        image_diagonal = float(np.sqrt(h ** 2 + w ** 2))
+
+        moments = cv2.moments(contour)
+        if moments["m00"] > 0:
+            cx = moments["m10"] / moments["m00"]
+            cy = moments["m01"] / moments["m00"]
+        else:
+            cx, cy = float(w) / 2, float(h) / 2
+        centre_dist = float(np.hypot(cx - w / 2, cy - h / 2)) / max(image_diagonal, 1e-6)
+
+        # Elongation. GA lesions are irregular but not needle-like; a very high
+        # ratio usually means a vessel or a CLAHE edge artefact.
+        if len(contour) >= 5:
+            (_, _), (ax_a, ax_b), _ = cv2.fitEllipse(contour)
+            major, minor = max(ax_a, ax_b), max(min(ax_a, ax_b), 1e-6)
+            eccentricity = float(min(major / minor, 20.0))
+        else:
+            eccentricity = 1.0
+
+        return {
+            "size_score": self._score_region_size(area, image_area),
+            "appearance_score": self._score_region_appearance(enhanced, contour),
+            "anatomy_score": self._score_region_anatomy_aware(contour, image_shape),
+            "intensity_prior": max(0.70, 1.0 - 0.15 * cluster_rank),
+            "log_area_fraction": float(np.log(max(area / image_area, 1e-9))),
+            "circularity": float(circularity),
+            "eccentricity": eccentricity,
+            "norm_dist_from_centre": centre_dist,
+        }
+
+    def score_region(self, features: Dict[str, float]) -> float:
+        """Combine region features into a selection score (higher = more likely GA).
+
+        Hand-weighted. `scripts/train_ga_ranker.py` fits these weights against the
+        marked GA edge; if that produces a model, this becomes its inference path.
+        """
+        return (
+            (0.40 * features["size_score"])
+            + (0.35 * features["appearance_score"])
+            + (0.25 * features["anatomy_score"])
+        ) * features["intensity_prior"]
+
     def _extract_cluster_contours(
         self,
         labels: np.ndarray,
@@ -432,63 +562,16 @@ class GASegmenterService:
 
         for cnt, cluster_idx in contour_records:
             area = cv2.contourArea(cnt)
-            
-            # 1. Size Filter
-            if area < max(self.min_area, self.min_area_fraction * image_area):
-                continue
-            
-            # 2. Circularity Filter (reject circles - likely blood vessels or disc)
-            perimeter = cv2.arcLength(cnt, True)
-            if perimeter == 0:
-                continue
-            circularity = 4 * np.pi * (area / (perimeter * perimeter))
-            if circularity > self.max_circularity:
-                continue
-            
-            # 3. Border/giant-blob filter
-            x, y, w_box, h_box = cv2.boundingRect(cnt)
-            box_area = float(w_box * h_box)
-            if box_area > self.max_bbox_fraction * image_area:
-                continue
-            if area > self.max_region_fraction * image_area:
+            passed, circularity = self.passes_filters(cnt, area, gray.shape)
+            if not passed:
                 continue
 
-            touch_count = 0
-            if x <= self.border_margin_px:
-                touch_count += 1
-            if y <= self.border_margin_px:
-                touch_count += 1
-            if (x + w_box) >= (w - self.border_margin_px):
-                touch_count += 1
-            if (y + h_box) >= (h - self.border_margin_px):
-                touch_count += 1
-            if touch_count >= 2 and area > self.border_reject_area_fraction * image_area:
-                continue
-            
-            # 4. Scoring.
-            #
-            # Design rule: no term here may depend on the fovea position.
-            # The measurand is the fovea-to-GA distance, so any term favouring
-            # regions at a particular distance from the fovea makes the output a
-            # function of the prior rather than the image. The previous version
-            # scored candidates against `target_dist_norm = 0.10` of the image
-            # diagonal, which drove the autonomous measurement to a near-constant
-            # value (Bland-Altman difference-vs-mean slope -2.06, r = -0.34,
-            # ICC = 0.000 on the holdout).
-            #
-            # What remains is evidence about the region itself: is it lesion-sized,
-            # does it look like a window defect, and is it in the macula.
-            anatomy_score = self._score_region_anatomy_aware(cnt, gray.shape)
-            size_score = self._score_region_size(area, image_area)
-            appearance_score = self._score_region_appearance(enhanced, cnt)
-
-            rank = cluster_rank_map.get(cluster_idx, 0)
-            intensity_prior = max(0.70, 1.0 - 0.15 * rank)
-            selection_score = (
-                (0.40 * size_score)
-                + (0.35 * appearance_score)
-                + (0.25 * anatomy_score)
-            ) * intensity_prior
+            # 4. Scoring — see `region_features` for the design rule.
+            features = self.region_features(
+                cnt, area, circularity, enhanced, gray.shape,
+                cluster_rank_map.get(cluster_idx, 0),
+            )
+            selection_score = self.score_region(features)
 
             # Retained for diagnostics only — never used for ranking.
             if fovea_local is not None:
