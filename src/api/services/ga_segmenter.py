@@ -29,7 +29,7 @@ class GASegmenterService:
         min_area: int = 500,
         max_circularity: float = 0.8,
         relative_area_threshold: float = 0.1,
-        max_regions: Optional[int] = 8,
+        max_regions: Optional[int] = 4,
         disc_exclusion_multiplier: float = 0.6,
         clahe_clip_limit: float = 3.0,
         morph_kernel_size: int = 11,
@@ -44,9 +44,12 @@ class GASegmenterService:
             min_area: Minimum contour area in pixels (default: 500)
             max_circularity: Maximum circularity to filter out circular objects (default: 0.8)
             relative_area_threshold: Keep regions >= this fraction of largest (default: 0.1)
-            max_regions: Maximum number of regions to return (default: 8). Callers
+            max_regions: Maximum number of regions to return (default: 4). Callers
                 that take a minimum over all returned regions degrade as this
-                grows, so returning everything is not a safe default.
+                grows, so returning everything is not a safe default. Selected on
+                the development eyes (lowest MAE); on those it is never worse than
+                8 per-image and better on 3 of 29, so the gain is small and rests
+                on few cases — most images already return 4 or fewer regions.
             disc_exclusion_multiplier: Disc masking radius multiplier (default: 0.6)
             clahe_clip_limit: CLAHE clip limit (default: 3.0)
             morph_kernel_size: Morphological operations kernel size (default: 11)
