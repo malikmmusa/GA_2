@@ -45,6 +45,10 @@ function App() {
   const [gaMessageBefore, setGAMessageBefore] = useState<string | null>(null);
   const [gaMessageAfter, setGAMessageAfter] = useState<string | null>(null);
 
+  // Which image, if any, needs the "automatic GA detection was not reliable"
+  // prompt. Set when the backend reports low confidence; cleared on dismissal.
+  const [autoGAFailedTarget, setAutoGAFailedTarget] = useState<Target | null>(null);
+
   // Track image registration state
   const [registrationResult, setRegistrationResult] = useState<ImageRegistrationResponse | null>(null);
   const [isRegistering, setIsRegistering] = useState(false);
@@ -82,6 +86,7 @@ function App() {
     setManualGAModeAfter(value);
   };
   const resetTargetConfirmationState = (target: Target): void => {
+    setAutoGAFailedTarget((prev) => (prev === target ? null : prev));
     if (target === 'before') {
       setFoveaConfirmedBefore(false);
       setGAConfirmedBefore(false);
@@ -412,6 +417,15 @@ function App() {
         }),
         { isProcessing: false, clearProgression: true }
       );
+
+      // The backend flags images where automatic segmentation should not be
+      // measured from. Regions are still drawn — they are often nearly right and
+      // useful context — but the user is told and put straight into manual mode
+      // rather than being left to trust a number we do not trust.
+      if (gaResult.auto_measurement_reliable === false) {
+        setManualGAModeForTarget(target, true);
+        setAutoGAFailedTarget(target);
+      }
     } catch (error: unknown) {
       setTargetProcessingState(
         target,
@@ -882,6 +896,44 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 py-8">
+      {/* Automatic GA detection was not reliable for this image. Manual mode is
+          already on; this tells the user why, so a low-confidence automatic
+          number is never mistaken for a confirmed one. */}
+      {autoGAFailedTarget && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="auto-ga-failed-title"
+          onClick={() => setAutoGAFailedTarget(null)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="auto-ga-failed-title" className="text-lg font-bold text-amber-700 mb-2">
+              Automatic GA detection unavailable
+            </h2>
+            <p className="text-sm text-gray-700 mb-3">
+              The {autoGAFailedTarget === 'before' ? 'first' : 'second'} image could not be
+              measured automatically with sufficient confidence, so no automatic measurement
+              has been taken.
+            </p>
+            <p className="text-sm text-gray-700 mb-4">
+              Manual selection is now enabled — click the GA edge nearest the fovea to measure
+              it yourself. Any regions shown are for reference only.
+            </p>
+            <button
+              onClick={() => setAutoGAFailedTarget(null)}
+              className="w-full px-4 py-2 bg-primary hover:opacity-90 text-white font-semibold rounded transition-colors"
+              autoFocus
+            >
+              Place GA point manually
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="container mx-auto px-4 max-w-7xl">
         {/* Header */}
         <header className="text-center mb-6">

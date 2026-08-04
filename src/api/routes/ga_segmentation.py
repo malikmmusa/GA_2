@@ -49,21 +49,28 @@ async def segment_ga(
     # Get segmenter
     segmenter = get_ga_segmenter()
 
-    # Segment GA regions
-    contours = segmenter.segment_ga_regions(
+    # Segment GA regions, and report whether the result is trustworthy enough to
+    # measure from automatically. Low confidence is not an error — the caller is
+    # expected to fall back to manual GA placement.
+    contours, confidence = segmenter.segment_ga_regions(
         image=image,
         disc_center_x=disc_center_x,
         disc_center_y=disc_center_y,
         disc_height_pixels=disc_height_pixels,
         en_face_split_x=en_face_split_x,
         fovea_x=fovea_x,
-        fovea_y=fovea_y
+        fovea_y=fovea_y,
+        return_confidence=True,
     )
 
     # Convert to JSON-serializable format
     regions = segmenter.contours_to_json(contours)
 
-    return build_ga_segmentation_response(regions)
+    return build_ga_segmentation_response(
+        regions,
+        confidence=confidence,
+        auto_measurement_reliable=segmenter.is_confident([confidence]),
+    )
 
 
 @router.post("/segment-ga-local", response_model=GASegmentationResponse)
