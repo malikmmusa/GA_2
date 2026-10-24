@@ -11,6 +11,7 @@ import * as api from './services/api';
 import type { ImageAnalysis, AppState, ImageRegistrationResponse } from './types/api';
 import { extractErrorMessage } from './utils/errorHandling';
 import { OPTIC_DISC_DIAMETER_MICRONS } from './constants/measurements';
+import { AUTO_GA_DETECTION_ENABLED } from './constants/featureFlags';
 import './index.css';
 
 function App() {
@@ -34,8 +35,8 @@ function App() {
   // Track GA confirmation state for each image
   const [gaConfirmedBefore, setGAConfirmedBefore] = useState(false);
   const [gaConfirmedAfter, setGAConfirmedAfter] = useState(false);
-  const [manualGAModeBefore, setManualGAModeBefore] = useState(false);
-  const [manualGAModeAfter, setManualGAModeAfter] = useState(false);
+  const [manualGAModeBefore, setManualGAModeBefore] = useState(!AUTO_GA_DETECTION_ENABLED);
+  const [manualGAModeAfter, setManualGAModeAfter] = useState(!AUTO_GA_DETECTION_ENABLED);
 
   // Track local GA segmentation processing state
   const [isProcessingLocalGABefore, setIsProcessingLocalGABefore] = useState(false);
@@ -90,13 +91,13 @@ function App() {
     if (target === 'before') {
       setFoveaConfirmedBefore(false);
       setGAConfirmedBefore(false);
-      setManualGAModeBefore(false);
+      setManualGAModeBefore(!AUTO_GA_DETECTION_ENABLED);
       setGAMessageBefore(null);
       return;
     }
     setFoveaConfirmedAfter(false);
     setGAConfirmedAfter(false);
-    setManualGAModeAfter(false);
+    setManualGAModeAfter(!AUTO_GA_DETECTION_ENABLED);
     setGAMessageAfter(null);
   };
   const setTargetProcessingState = (
@@ -394,6 +395,22 @@ function App() {
       return;
     }
 
+    // Automatic GA detection is off: go straight to manual placement. An empty
+    // region set still marks the image as "GA step reached", which is what the
+    // canvas gates its GA interaction on.
+    if (!AUTO_GA_DETECTION_ENABLED) {
+      mergeTargetImageState(
+        target,
+        (latestImage) => ({
+          ...latestImage,
+          gaRegions: { regions: [], region_count: 0 },
+        }),
+        { isProcessing: false, clearProgression: true }
+      );
+      setManualGAModeForTarget(target, true);
+      return;
+    }
+
     try {
       setTargetProcessingState(target, true);
 
@@ -667,6 +684,8 @@ function App() {
     target: Target,
     regionIndex: number
   ) => {
+    if (!AUTO_GA_DETECTION_ENABLED) return;
+
     const imageAnalysis = getImageAnalysis(target);
     if (!imageAnalysis?.gaRegions || !imageAnalysis.disc || !imageAnalysis.fovea) {
       return;
@@ -706,6 +725,8 @@ function App() {
    * Handle GA area click (outside existing regions - triggers localized segmentation)
    */
   const handleGAAreaClick = async (target: Target, x: number, y: number) => {
+    if (!AUTO_GA_DETECTION_ENABLED) return;
+
     const imageAnalysis = getImageAnalysis(target);
     if (!imageAnalysis?.gaRegions || !imageAnalysis.disc || !imageAnalysis.fovea || !imageAnalysis.imageFile) {
       return;
@@ -794,7 +815,7 @@ function App() {
 
     setTargetImageState(target, updatedImage);
 
-    setManualGAModeForTarget(target, false);
+    setManualGAModeForTarget(target, !AUTO_GA_DETECTION_ENABLED);
     setGAMessageForTarget(target, null);
 
   };
@@ -806,7 +827,10 @@ function App() {
     const imageAnalysis = getImageAnalysis(target);
     if (!imageAnalysis) return;
 
-    setManualGAModeForTarget(target, (prev) => !prev);
+    // Nothing to fall back to while automatic detection is off.
+    if (AUTO_GA_DETECTION_ENABLED) {
+      setManualGAModeForTarget(target, (prev) => !prev);
+    }
 
     const updatedImage: ImageAnalysis = {
       ...imageAnalysis,

@@ -6,6 +6,7 @@
 import React, { useRef, useEffect, useState } from 'react';
 import type { ImageAnalysis } from '../types/api';
 import { getImageCoordinates } from '../utils/canvas';
+import { AUTO_GA_DETECTION_ENABLED } from '../constants/featureFlags';
 
 // Constants
 const FOVEA_RADIUS = 4; // Display radius in pixels for fovea marker
@@ -856,7 +857,10 @@ export const ImageCanvas: React.FC<ImageCanvasProps> = ({
     !!imageAnalysis.gaRegions &&
     !gaConfirmed;
   const canExpandImage = canExpandForFoveaAdjustment || canExpandForGASelection;
-  const shouldShowManualGAButton = !!imageAnalysis.gaRegions && foveaConfirmed && !gaConfirmed;
+  // With automatic detection off there is no other mode to toggle to, so the
+  // Manual / Cancel Manual control is hidden.
+  const shouldShowManualGAButton =
+    AUTO_GA_DETECTION_ENABLED && !!imageAnalysis.gaRegions && foveaConfirmed && !gaConfirmed;
   const manualGAButtonBaseClass =
     'absolute top-2 left-2 z-10 px-3 py-1.5 text-xs font-semibold rounded-full border shadow-sm transition-colors';
 
