@@ -130,10 +130,9 @@ class RETFound_UNet(nn.Module):
         W_grid = int(np.sqrt(N))
         x_enc = x_enc.transpose(1, 2).contiguous().reshape(B, C, H_grid, W_grid)
 
-        # 2. Height head (operates on bottleneck before decoding)
+        # 2. Bottleneck heads (before decoding)
         if predict_height:
             height_normalized = self.height_head(x_enc)
-
         # 3. Decoder
         d = x_enc
         for up_block in self.decoder_blocks:
@@ -198,7 +197,7 @@ class RETFound_UNet(nn.Module):
         msg = model.load_state_dict(state_dict, strict=False)
         print(f"Checkpoint loaded (strict=False): {msg}")
         if msg.missing_keys:
-            print(f"height_head not in checkpoint — randomly initialized ({len(msg.missing_keys)} missing keys).")
+            print(f"Randomly initialized (not in checkpoint): {sorted(msg.missing_keys)}")
         return model
 
 

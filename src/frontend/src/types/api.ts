@@ -37,6 +37,13 @@ export interface FoveaDetectionResponse {
 export interface GASegmentationResponse {
   regions: Array<Array<[number, number]>>;
   region_count: number;
+  /** Confidence (0-1) that an automatic measurement from these regions is usable. */
+  confidence?: number;
+  /**
+   * False when automatic segmentation should not be measured from and the user
+   * should place the GA point manually.
+   */
+  auto_measurement_reliable?: boolean;
 }
 
 export interface DistanceCalculationRequest {

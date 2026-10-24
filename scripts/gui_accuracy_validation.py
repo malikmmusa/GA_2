@@ -929,9 +929,17 @@ def process_case(page: Page, case: Case, meta: Dict[str, ImageMeta], output_dir:
     return rows
 
 
+# Every row this script writes comes from a run where the operator clicks the GA
+# point by hand (select_distance_manual) and the disc is dragged to ground truth.
+# The resulting errors are click precision, NOT autonomous pipeline accuracy —
+# they are roughly 50x smaller. The column below travels with the data so the two
+# can never be confused. See scripts/evaluate.py for both modes side by side.
+MEASUREMENT_MODE = "assisted_manual_ga"
+
 SUMMARY_FIELDS = [
     "case_key",
     "image_filename",
+    "measurement_mode",
     "pair_mode",
     "raw_marked_exists",
     "output_file",
@@ -965,7 +973,14 @@ def write_summary(output_dir: Path, rows: List[Dict[str, str]]) -> None:
         base = merged.get(row["image_filename"], {})
         for k in fieldnames:
             row[k] = row.get(k, base.get(k, ""))
+        row["measurement_mode"] = MEASUREMENT_MODE
         merged[row["image_filename"]] = row
+
+    # Rows carried over from an earlier run predate the column; they came from
+    # this same assisted path, so label them rather than leaving them blank.
+    for row in merged.values():
+        if not row.get("measurement_mode"):
+            row["measurement_mode"] = MEASUREMENT_MODE
 
     ordered_rows = sorted(merged.values(), key=lambda r: (r["case_key"], r["image_filename"]))
 
@@ -974,6 +989,71 @@ def write_summary(output_dir: Path, rows: List[Dict[str, str]]) -> None:
         writer.writeheader()
         for row in ordered_rows:
             writer.writerow(row)
+
+
+def dump_ground_truth_coords(image_meta: Dict[str, ImageMeta], output_dir: Path) -> int:
+    """Print and save all ground-truth coordinates for manual placement."""
+    ensure_dir(output_dir)
+    csv_path = output_dir / "ground_truth_coords.csv"
+    fieldnames = [
+        "filename", "image_id",
+        "fovea_x", "fovea_y",
+        "ga_target_x", "ga_target_y",
+        "disc_center_x", "disc_top_y", "disc_bottom_y", "disc_height_px",
+        "enface_fovea_x", "enface_fovea_y",
+        "enface_ga_x", "enface_ga_y",
+        "split_x", "img_width", "img_height",
+    ]
+
+    rows = []
+    for fname in sorted(image_meta.keys()):
+        m = image_meta[fname]
+        row: Dict[str, str] = {
+            "filename": fname,
+            "image_id": Path(fname).stem,
+            "split_x": str(m.split_x),
+            "img_width": str(m.width),
+            "img_height": str(m.height),
+        }
+
+        if m.fovea_xy:
+            row["fovea_x"] = f"{m.fovea_xy[0]:.1f}"
+            row["fovea_y"] = f"{m.fovea_xy[1]:.1f}"
+            row["enface_fovea_x"] = f"{m.fovea_xy[0] - m.split_x:.1f}"
+            row["enface_fovea_y"] = f"{m.fovea_xy[1]:.1f}"
+
+        if m.ga_target_xy:
+            row["ga_target_x"] = f"{m.ga_target_xy[0]:.1f}"
+            row["ga_target_y"] = f"{m.ga_target_xy[1]:.1f}"
+            row["enface_ga_x"] = f"{m.ga_target_xy[0] - m.split_x:.1f}"
+            row["enface_ga_y"] = f"{m.ga_target_xy[1]:.1f}"
+
+        if m.disc_gt:
+            cx, top_y, bot_y = m.disc_gt
+            row["disc_center_x"] = f"{cx:.1f}"
+            row["disc_top_y"] = f"{top_y:.1f}"
+            row["disc_bottom_y"] = f"{bot_y:.1f}"
+            row["disc_height_px"] = f"{bot_y - top_y:.1f}"
+
+        rows.append(row)
+
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"\nGround-truth coordinates saved to: {csv_path}\n")
+    print(f"{'Filename':<45} {'Fovea(x,y)':<18} {'GA target(x,y)':<18} {'Disc(top,bot,h)':<22}")
+    print("-" * 105)
+    for r in rows:
+        fov = f"({r.get('fovea_x','?')}, {r.get('fovea_y','?')})" if r.get("fovea_x") else "N/A"
+        ga = f"({r.get('ga_target_x','?')}, {r.get('ga_target_y','?')})" if r.get("ga_target_x") else "N/A"
+        disc = (f"({r.get('disc_top_y','?')}, {r.get('disc_bottom_y','?')}, h={r.get('disc_height_px','?')})"
+                if r.get("disc_top_y") else "N/A")
+        print(f"{r['filename']:<45} {fov:<18} {ga:<18} {disc:<22}")
+
+    print(f"\nTotal: {len(rows)} images")
+    return 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -985,6 +1065,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=0, help="Number of cases to process (0=all)")
     parser.add_argument("--headed", action="store_true", help="Run browser in headed mode")
     parser.add_argument("--skip-install-check", action="store_true", help="Skip venv/python existence check")
+    parser.add_argument("--dump-coords", action="store_true",
+                        help="Print ground-truth coordinates for all images and exit (no browser needed)")
     return parser.parse_args()
 
 
@@ -999,6 +1081,10 @@ def main() -> int:
         raise RuntimeError(f"Missing venv Python at {python_exe}. Set up environment first.")
 
     image_meta = prepare_image_meta(args.input_dir, args.raw_dir)
+
+    if args.dump_coords:
+        return dump_ground_truth_coords(image_meta, args.output_dir)
+
     all_files = [args.input_dir / k for k in sorted(image_meta.keys())]
     cases = build_cases(all_files)
 

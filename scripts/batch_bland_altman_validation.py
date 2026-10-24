@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import base64
 import csv
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -1058,11 +1059,23 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--offset", type=int, default=0)
     p.add_argument("--limit", type=int, default=0, help="0 = all")
     p.add_argument("--no-model", action="store_true", help="Skip DL disc model (use geometric fallback)")
+    p.add_argument(
+        "--cv2-seed", type=int, default=int(os.environ.get("OCT_CV2_SEED", "0")),
+        help="Seed for OpenCV's global RNG (default 0, or $OCT_CV2_SEED). "
+             "cv2.kmeans draws from it, so segmentation varies seed to seed; "
+             "sweep this to put error bars on a validation result.",
+    )
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+
+    # Same rationale as tests/conftest.py: cv2.kmeans is seeded from one
+    # process-global RNG, so a run's clustering depends on everything drawn
+    # before it. Pinning it makes a single run reproducible; varying it across
+    # runs is what exposes the segmentation's own seed sensitivity.
+    cv2.setRNGSeed(args.cv2_seed)
 
     out_dir = args.output_dir
     comp_dir = out_dir / "comparisons"

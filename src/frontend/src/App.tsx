@@ -11,6 +11,7 @@ import * as api from './services/api';
 import type { ImageAnalysis, AppState, ImageRegistrationResponse } from './types/api';
 import { extractErrorMessage } from './utils/errorHandling';
 import { OPTIC_DISC_DIAMETER_MICRONS } from './constants/measurements';
+import { AUTO_GA_DETECTION_ENABLED } from './constants/featureFlags';
 import './index.css';
 
 function App() {
@@ -34,8 +35,8 @@ function App() {
   // Track GA confirmation state for each image
   const [gaConfirmedBefore, setGAConfirmedBefore] = useState(false);
   const [gaConfirmedAfter, setGAConfirmedAfter] = useState(false);
-  const [manualGAModeBefore, setManualGAModeBefore] = useState(false);
-  const [manualGAModeAfter, setManualGAModeAfter] = useState(false);
+  const [manualGAModeBefore, setManualGAModeBefore] = useState(!AUTO_GA_DETECTION_ENABLED);
+  const [manualGAModeAfter, setManualGAModeAfter] = useState(!AUTO_GA_DETECTION_ENABLED);
 
   // Track local GA segmentation processing state
   const [isProcessingLocalGABefore, setIsProcessingLocalGABefore] = useState(false);
@@ -44,6 +45,10 @@ function App() {
   // Track GA region selection messages
   const [gaMessageBefore, setGAMessageBefore] = useState<string | null>(null);
   const [gaMessageAfter, setGAMessageAfter] = useState<string | null>(null);
+
+  // Which image, if any, needs the "automatic GA detection was not reliable"
+  // prompt. Set when the backend reports low confidence; cleared on dismissal.
+  const [autoGAFailedTarget, setAutoGAFailedTarget] = useState<Target | null>(null);
 
   // Track image registration state
   const [registrationResult, setRegistrationResult] = useState<ImageRegistrationResponse | null>(null);
@@ -82,16 +87,17 @@ function App() {
     setManualGAModeAfter(value);
   };
   const resetTargetConfirmationState = (target: Target): void => {
+    setAutoGAFailedTarget((prev) => (prev === target ? null : prev));
     if (target === 'before') {
       setFoveaConfirmedBefore(false);
       setGAConfirmedBefore(false);
-      setManualGAModeBefore(false);
+      setManualGAModeBefore(!AUTO_GA_DETECTION_ENABLED);
       setGAMessageBefore(null);
       return;
     }
     setFoveaConfirmedAfter(false);
     setGAConfirmedAfter(false);
-    setManualGAModeAfter(false);
+    setManualGAModeAfter(!AUTO_GA_DETECTION_ENABLED);
     setGAMessageAfter(null);
   };
   const setTargetProcessingState = (
@@ -389,6 +395,22 @@ function App() {
       return;
     }
 
+    // Automatic GA detection is off: go straight to manual placement. An empty
+    // region set still marks the image as "GA step reached", which is what the
+    // canvas gates its GA interaction on.
+    if (!AUTO_GA_DETECTION_ENABLED) {
+      mergeTargetImageState(
+        target,
+        (latestImage) => ({
+          ...latestImage,
+          gaRegions: { regions: [], region_count: 0 },
+        }),
+        { isProcessing: false, clearProgression: true }
+      );
+      setManualGAModeForTarget(target, true);
+      return;
+    }
+
     try {
       setTargetProcessingState(target, true);
 
@@ -412,6 +434,15 @@ function App() {
         }),
         { isProcessing: false, clearProgression: true }
       );
+
+      // The backend flags images where automatic segmentation should not be
+      // measured from. Regions are still drawn — they are often nearly right and
+      // useful context — but the user is told and put straight into manual mode
+      // rather than being left to trust a number we do not trust.
+      if (gaResult.auto_measurement_reliable === false) {
+        setManualGAModeForTarget(target, true);
+        setAutoGAFailedTarget(target);
+      }
     } catch (error: unknown) {
       setTargetProcessingState(
         target,
@@ -653,6 +684,8 @@ function App() {
     target: Target,
     regionIndex: number
   ) => {
+    if (!AUTO_GA_DETECTION_ENABLED) return;
+
     const imageAnalysis = getImageAnalysis(target);
     if (!imageAnalysis?.gaRegions || !imageAnalysis.disc || !imageAnalysis.fovea) {
       return;
@@ -692,6 +725,8 @@ function App() {
    * Handle GA area click (outside existing regions - triggers localized segmentation)
    */
   const handleGAAreaClick = async (target: Target, x: number, y: number) => {
+    if (!AUTO_GA_DETECTION_ENABLED) return;
+
     const imageAnalysis = getImageAnalysis(target);
     if (!imageAnalysis?.gaRegions || !imageAnalysis.disc || !imageAnalysis.fovea || !imageAnalysis.imageFile) {
       return;
@@ -780,7 +815,7 @@ function App() {
 
     setTargetImageState(target, updatedImage);
 
-    setManualGAModeForTarget(target, false);
+    setManualGAModeForTarget(target, !AUTO_GA_DETECTION_ENABLED);
     setGAMessageForTarget(target, null);
 
   };
@@ -792,7 +827,10 @@ function App() {
     const imageAnalysis = getImageAnalysis(target);
     if (!imageAnalysis) return;
 
-    setManualGAModeForTarget(target, (prev) => !prev);
+    // Nothing to fall back to while automatic detection is off.
+    if (AUTO_GA_DETECTION_ENABLED) {
+      setManualGAModeForTarget(target, (prev) => !prev);
+    }
 
     const updatedImage: ImageAnalysis = {
       ...imageAnalysis,
@@ -882,6 +920,44 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 py-8">
+      {/* Automatic GA detection was not reliable for this image. Manual mode is
+          already on; this tells the user why, so a low-confidence automatic
+          number is never mistaken for a confirmed one. */}
+      {autoGAFailedTarget && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="auto-ga-failed-title"
+          onClick={() => setAutoGAFailedTarget(null)}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-md w-full p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="auto-ga-failed-title" className="text-lg font-bold text-amber-700 mb-2">
+              Automatic GA detection unavailable
+            </h2>
+            <p className="text-sm text-gray-700 mb-3">
+              The {autoGAFailedTarget === 'before' ? 'first' : 'second'} image could not be
+              measured automatically with sufficient confidence, so no automatic measurement
+              has been taken.
+            </p>
+            <p className="text-sm text-gray-700 mb-4">
+              Manual selection is now enabled — click the GA edge nearest the fovea to measure
+              it yourself. Any regions shown are for reference only.
+            </p>
+            <button
+              onClick={() => setAutoGAFailedTarget(null)}
+              className="w-full px-4 py-2 bg-primary hover:opacity-90 text-white font-semibold rounded transition-colors"
+              autoFocus
+            >
+              Place GA point manually
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="container mx-auto px-4 max-w-7xl">
         {/* Header */}
         <header className="text-center mb-6">

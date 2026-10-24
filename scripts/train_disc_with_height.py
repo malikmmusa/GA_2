@@ -22,6 +22,7 @@ from albumentations.pytorch import ToTensorV2
 # Allow running from project root without installing the package
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from src.models.retfound_unet import RETFound_UNet, HeatmapGenerator, get_coordinates_from_heatmap
+from scripts.make_splits import split_dataframe
 
 # ---------------------------------------------------------------------------
 # Config
@@ -37,10 +38,14 @@ CONFIG = {
     'phase1_lr': 1e-3,
     'phase2_lr_encoder': 1e-5,
     'phase2_lr_head': 1e-4,
-    'val_split': 0.2,
     'seed': 42,
     'data_dir': 'data/training/en_face',
     'csv_file': 'data/training/disc_labels_v2.csv',
+    # Frozen eye-grouped split (scripts/make_splits.py). Replaces the old random
+    # 80/20 filename split, which put both timepoints of the same eye on opposite
+    # sides — 9 of 10 val images had their partner in train.
+    'split_file': 'data/splits/splits_v1.json',
+    'val_fold': 0,
     'checkpoint_path': 'weights/best_disc_model.pth',
     'save_path': 'weights/best_disc_model_v2.pth',
     'phase1_save_path': 'weights/disc_model_phase1.pth',
@@ -291,9 +296,8 @@ def main():
         print(f"[ERROR] CSV missing columns: {missing}")
         sys.exit(1)
 
-    train_df = df.sample(frac=1 - CONFIG['val_split'], random_state=CONFIG['seed'])
-    val_df = df.drop(train_df.index)
-    print(f"Train: {len(train_df)}  Val: {len(val_df)}")
+    train_df, val_df = split_dataframe(df, CONFIG['split_file'], CONFIG['val_fold'])
+    print(f"Train: {len(train_df)}  Val: {len(val_df)}  (val = fold {CONFIG['val_fold']})")
 
     train_transform, val_transform = build_transforms(CONFIG['img_size'])
 
